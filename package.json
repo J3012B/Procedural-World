@@ -3,8 +3,12 @@
   "version": "1.0.0",
   "description": "A simple browser-based game built with HTML5 Canvas",
   "main": "index.html",
+  "homepage": "https://j3012b.github.io/Procedural-World",
   "scripts": {
-    "start": "http-server -p 8080 -c-1"
+    "start": "http-server -p 8080 -c-1",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d .",
+    "build": "echo 'No build step required'"
   },
   "keywords": [
     "game",
@@ -16,5 +20,8 @@
   "license": "MIT",
   "dependencies": {
     "http-server": "^14.1.1"
+  },
+  "devDependencies": {
+    "gh-pages": "^6.3.0"
   }
-} 
+}

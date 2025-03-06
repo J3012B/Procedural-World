@@ -2,19 +2,21 @@
 
 A browser-based procedurally generated world explorer built with HTML5 Canvas, CSS, and JavaScript.
 
+## Play Online
+
+You can play the game online at: [https://j3012b.github.io/Procedural-World](https://j3012b.github.io/Procedural-World)
+
 ## Game Description
 
 Explore a procedurally generated world with different terrain types including water, sand, grass, earth, and stone. The world is infinite and can be explored in all directions. Navigate your cat character around trees and rocks while exploring the landscape.
 
 ## How to Play
 
-1. Run `npm start` to start the local server
-2. Open your browser to `http://localhost:8080`
-3. Use the following controls to navigate the world:
+1. Use the following controls to navigate the world:
    - WASD or Arrow Keys: Move your cat around the world
    - M: Toggle minimap visibility
-4. The coordinates display in the top-left shows your current position in the world
-5. Avoid obstacles like water, trees, and rocks
+2. The coordinates display in the top-left shows your current position in the world
+3. Avoid obstacles like water, trees, and rocks
 
 ## Features
 
@@ -37,18 +39,7 @@ The game is built using:
 
 The world generation uses a simplified noise function to create varied terrain patterns. Each terrain type is represented by a unique color and texture. Trees and rocks are procedurally placed based on the underlying terrain type.
 
-## Future Improvements
-
-Planned enhancements:
-- Implement proper Perlin/Simplex noise for better terrain generation
-- Add more types of structures and objects
-- Implement day/night cycle
-- Add weather effects
-- Add interactive elements and resources to collect
-- Create a quest or goal system
-- Add NPCs and enemies
-
-## Running the Project
+## Running Locally
 
 ```
 # Install dependencies
@@ -59,6 +50,29 @@ npm start
 ```
 
 Then open your browser to `http://localhost:8080`.
+
+## Deployment
+
+This project is deployed using GitHub Pages. To deploy your own version:
+
+```
+# Install dependencies
+npm install
+
+# Deploy to GitHub Pages
+npm run deploy
+```
+
+## Future Improvements
+
+Planned enhancements:
+- Implement proper Perlin/Simplex noise for better terrain generation
+- Add more types of structures and objects
+- Implement day/night cycle
+- Add weather effects
+- Add interactive elements and resources to collect
+- Create a quest or goal system
+- Add NPCs and enemies
 
 ## License
 
