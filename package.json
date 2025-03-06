@@ -1,0 +1,20 @@
+{
+  "name": "canvas-game",
+  "version": "1.0.0",
+  "description": "A simple browser-based game built with HTML5 Canvas",
+  "main": "index.html",
+  "scripts": {
+    "start": "http-server -p 8080 -c-1"
+  },
+  "keywords": [
+    "game",
+    "canvas",
+    "html5",
+    "javascript"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "http-server": "^14.1.1"
+  }
+} 
