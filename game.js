@@ -965,16 +965,21 @@ function drawKillEffects() {
                     effect.worldX += effect.velocityX;
                     effect.worldY += effect.velocityY;
                     
-                    // Check for collision with ground (simulate ground at the same Y level as the heart was spawned)
-                    const groundY = effect.worldY;
+                    // If this is the first update, store the initial Y position as the ground level
+                    if (effect.groundY === undefined) {
+                        effect.groundY = effect.worldY;
+                    }
+                    
+                    // Check for collision with ground
                     if (effect.velocityY > 0 && Math.abs(effect.velocityY) < 0.2) {
                         effect.grounded = true;
                         effect.bounceTime = 0;
+                        effect.worldY = effect.groundY; // Reset to ground level
                     }
                     
                     // Bounce if hitting the ground
-                    if (effect.worldY > groundY && effect.velocityY > 0) {
-                        effect.worldY = groundY;
+                    if (effect.worldY > effect.groundY && effect.velocityY > 0) {
+                        effect.worldY = effect.groundY;
                         effect.velocityY = -effect.velocityY * effect.bounce;
                         
                         // If bounce is too small, stop bouncing
@@ -987,7 +992,8 @@ function drawKillEffects() {
                     // Heart is on the ground, make it hover slightly
                     effect.bounceTime += 0.05;
                     effect.bounceHeight = Math.sin(effect.bounceTime) * 3;
-                    effect.worldY = effect.worldY + effect.bounceHeight;
+                    // Don't modify the actual worldY position, just store the bounce height
+                    // The drawing function will use this to offset the visual position
                 }
                 
                 // Check for collision with player
@@ -1082,6 +1088,11 @@ function drawHeartEffect(effect, x, y) {
     try {
         // Skip if already collected
         if (effect.collected) return;
+        
+        // Apply bounce height to y-coordinate if the heart is grounded
+        if (effect.grounded && effect.bounceHeight !== undefined) {
+            y -= effect.bounceHeight; // Subtract because y increases downward in canvas
+        }
         
         // Calculate pulse size modifier (make heart "beat")
         const pulse = Math.sin(effect.pulseTime * 0.1) * 0.2 + 1;
@@ -2807,6 +2818,7 @@ function addKillEffects(x, y, enemyType, score) {
                     bounce: 0.6,
                     friction: 0.95,
                     grounded: false,
+                    groundY: y, // Store the initial Y position as the ground level
                     bounceHeight: 0,
                     bounceTime: 0
                 });
