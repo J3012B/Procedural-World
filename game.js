@@ -84,8 +84,20 @@ let player = {
     attackCooldownDuration: 20, // Frames of cooldown (0.33 seconds at 60fps)
     attackDuration: 15, // How long the attack animation lasts
     attackTime: 0, // Current frame of the attack animation
-    attackRange: PLAYER_SIZE * 2.5, // Range of the sword attack (increased)
-    attackDamage: 2 // Damage dealt by the sword (increased)
+    attackRange: PLAYER_SIZE * 2.5, // Range of the sword attack
+    minDamage: 1, // Minimum damage dealt by the sword
+    maxDamage: 3, // Maximum damage dealt by the sword
+    criticalChance: 0.1, // 10% chance for critical hit
+    criticalMultiplier: 2, // Critical hits do double damage
+    inCombat: false, // Whether the player is currently in combat
+    combatTimer: 0, // Time remaining in combat state
+    combatDuration: 180, // How long combat lasts after last enemy interaction (3 seconds)
+    nearbyEnemies: [], // Enemies that are currently in combat range
+    score: 0, // Player's score
+    combo: 0, // Current combo count
+    comboTimer: 0, // Time remaining for current combo
+    comboDuration: 180, // How long combos last (3 seconds at 60fps)
+    killEffects: [] // Visual effects for kills
 };
 
 // Enemy types
@@ -99,19 +111,20 @@ const ENEMY_TYPES = {
 const ENEMY_PROPERTIES = {
     [ENEMY_TYPES.GOBLIN]: {
         color: '#4CAF50', // Green
-        size: PLAYER_SIZE * 0.8,
-        speed: 0.8, // Reduced speed
+        size: PLAYER_SIZE * 0.9, // Slightly larger
+        speed: 1.0, // Faster than other enemies
         followPlayer: true,
-        detectionRadius: TILE_SIZE * 4, // Reduced detection radius
-        health: 1 // Weaker health
+        detectionRadius: TILE_SIZE * 6, // Better detection
+        health: 5, // Much tougher
+        damageResistance: 0.3 // 30% chance to resist damage
     },
     [ENEMY_TYPES.SKELETON]: {
         color: '#E0E0E0', // Light gray
         size: PLAYER_SIZE * 0.9,
         speed: 0.5, // Reduced speed
         followPlayer: true,
-        detectionRadius: TILE_SIZE * 5, // Reduced detection radius
-        health: 2 // Default health
+        detectionRadius: TILE_SIZE * 5,
+        health: 3 // Medium health
     },
     [ENEMY_TYPES.SLIME]: {
         color: '#9C27B0', // Purple
@@ -119,7 +132,7 @@ const ENEMY_PROPERTIES = {
         speed: 0.3, // Reduced speed
         followPlayer: false,
         detectionRadius: 0,
-        health: 1 // Weaker health
+        health: 2 // Weakest but still requires two hits
     }
 };
 
@@ -172,6 +185,11 @@ function init() {
             if (gameTime % 60 === 0) {
                 console.log(`Key down: ${e.key}`);
             }
+            
+            // Initialize audio on first user interaction
+            if (!audioContext) {
+                initAudio();
+            }
         });
         
         window.addEventListener('keyup', e => { 
@@ -181,13 +199,19 @@ function init() {
             }
         });
         
+        // Add music controls
+        window.addEventListener('keydown', e => {
+            // Toggle music with 'P' key
+            if (e.key === 'p' || e.key === 'P') {
+                toggleMusic();
+            }
+        });
+        
         // Set up gamepad support
         initGamepadSupport();
         
-        // Generate tile images
+        // Generate tile and object images
         generateTileImages();
-        
-        // Generate object images
         generateObjectImages();
         
         // Initialize player position
@@ -196,8 +220,18 @@ function init() {
         // Spawn initial enemies
         spawnEnemies();
         
+        // Try to initialize audio (may be blocked until user interaction)
+        try {
+            initAudio();
+        } catch (e) {
+            console.log("Audio initialization deferred until user interaction");
+        }
+        
         // Start the game loop
         gameLoop();
+        
+        // Show welcome message with instructions
+        showMessage("Welcome to Procedural World! Press P to toggle music.", 5000);
     } catch (error) {
         errorHandler.handle(error, 'initialization');
     }
@@ -807,6 +841,18 @@ function updateCamera() {
     // Update camera position to center on player
     cameraX = player.worldX - centerX + player.size / 2;
     cameraY = player.worldY - centerY + player.size / 2;
+    
+    // Apply screen shake if active
+    if (screenShakeAmount > 0.1) {
+        // Random shake offset
+        cameraX += (Math.random() * 2 - 1) * screenShakeAmount;
+        cameraY += (Math.random() * 2 - 1) * screenShakeAmount;
+        
+        // Decay shake amount
+        screenShakeAmount *= screenShakeDecay;
+    } else {
+        screenShakeAmount = 0;
+    }
 }
 
 // Render the game world
@@ -815,6 +861,11 @@ function render() {
         // Clear the canvas with a black background
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw combat indicator if in combat
+        if (player.inCombat) {
+            drawCombatIndicator();
+        }
         
         // Calculate visible tile range
         const startTileX = Math.floor(cameraX / TILE_SIZE) - 1;
@@ -854,6 +905,9 @@ function render() {
             }
         }
         
+        // Draw kill effects
+        drawKillEffects();
+        
         // Draw enemies
         drawEnemies();
         
@@ -863,12 +917,133 @@ function render() {
         // Draw health UI
         drawHealthUI();
         
+        // Draw score display
+        drawScoreDisplay();
+        
         // Draw minimap
         if (minimapVisible) {
             drawMinimap();
         }
     } catch (error) {
         errorHandler.handle(error, 'rendering');
+    }
+}
+
+// Draw kill effects
+function drawKillEffects() {
+    try {
+        // Process each kill effect
+        for (let i = player.killEffects.length - 1; i >= 0; i--) {
+            const effect = player.killEffects[i];
+            
+            // Update effect lifetime
+            effect.lifetime--;
+            
+            // Remove expired effects
+            if (effect.lifetime <= 0) {
+                player.killEffects.splice(i, 1);
+                continue;
+            }
+            
+            // Calculate screen position
+            const screenX = Math.round(effect.worldX - cameraX);
+            const screenY = Math.round(effect.worldY - cameraY);
+            
+            // Skip if off screen
+            if (screenX < -50 || screenX > canvas.width + 50 || 
+                screenY < -50 || screenY > canvas.height + 50) {
+                continue;
+            }
+            
+            // Draw based on effect type
+            switch (effect.type) {
+                case 'explosion':
+                    drawExplosionEffect(effect, screenX, screenY);
+                    break;
+                case 'text':
+                    drawTextEffect(effect, screenX, screenY);
+                    break;
+                case 'particles':
+                    drawParticleEffect(effect, screenX, screenY);
+                    break;
+            }
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'kill effects');
+    }
+}
+
+// Draw explosion effect
+function drawExplosionEffect(effect, x, y) {
+    // Calculate progress (1.0 to 0.0)
+    const progress = effect.lifetime / effect.maxLifetime;
+    
+    // Size grows then shrinks
+    const size = effect.size * (1 - Math.abs(progress - 0.5) * 2);
+    
+    // Opacity fades out
+    const opacity = progress;
+    
+    // Draw outer circle
+    ctx.beginPath();
+    ctx.arc(x, y, size, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255, 200, 50, ${opacity * 0.7})`;
+    ctx.fill();
+    
+    // Draw inner circle
+    ctx.beginPath();
+    ctx.arc(x, y, size * 0.6, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
+    ctx.fill();
+}
+
+// Draw text effect
+function drawTextEffect(effect, x, y) {
+    // Calculate progress (1.0 to 0.0)
+    const progress = effect.lifetime / effect.maxLifetime;
+    
+    // Text rises up
+    const yOffset = (1 - progress) * 40;
+    
+    // Opacity fades out at the end
+    const opacity = progress < 0.3 ? progress / 0.3 : 1;
+    
+    // Text size pulses
+    const sizeFactor = 1 + Math.sin(effect.lifetime * 0.2) * 0.1;
+    
+    // Draw text
+    ctx.font = `bold ${effect.size * sizeFactor}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = `rgba(${effect.color}, ${opacity})`;
+    ctx.strokeStyle = `rgba(0, 0, 0, ${opacity})`;
+    ctx.lineWidth = 3;
+    
+    ctx.strokeText(effect.text, x, y - yOffset);
+    ctx.fillText(effect.text, x, y - yOffset);
+}
+
+// Draw particle effect
+function drawParticleEffect(effect, x, y) {
+    // Calculate progress (1.0 to 0.0)
+    const progress = effect.lifetime / effect.maxLifetime;
+    
+    // Each particle
+    for (const particle of effect.particles) {
+        // Calculate particle position
+        const particleX = x + particle.x * (1 - progress);
+        const particleY = y + particle.y * (1 - progress) - (1 - progress) * 50; // Add upward motion
+        
+        // Opacity fades out
+        const opacity = progress;
+        
+        // Size shrinks
+        const size = particle.size * progress;
+        
+        // Draw particle
+        ctx.beginPath();
+        ctx.arc(particleX, particleY, size, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${particle.color}, ${opacity})`;
+        ctx.fill();
     }
 }
 
@@ -1439,6 +1614,84 @@ function drawMinimap() {
     }
 }
 
+// Update player's combat state
+function updateCombatState() {
+    try {
+        // Store previous combat state
+        const wasInCombat = player.inCombat;
+        
+        // Clear the list of nearby enemies
+        player.nearbyEnemies = [];
+        
+        // Check for enemies in combat detection range
+        const combatDetectionRange = TILE_SIZE * 5; // 5 tiles
+        
+        for (let i = 0; i < enemies.length; i++) {
+            const enemy = enemies[i];
+            
+            // Calculate distance to player
+            const dx = enemy.worldX - player.worldX;
+            const dy = enemy.worldY - player.worldY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            // If enemy is within range, add to nearby enemies
+            if (distance < combatDetectionRange) {
+                player.nearbyEnemies.push({
+                    index: i,
+                    distance: distance,
+                    type: enemy.type
+                });
+            }
+        }
+        
+        // Update combat state based on nearby enemies
+        if (player.nearbyEnemies.length > 0) {
+            // Enter or stay in combat
+            player.inCombat = true;
+            player.combatTimer = player.combatDuration;
+        } else if (player.combatTimer > 0) {
+            // Countdown combat timer if no enemies nearby
+            player.combatTimer--;
+            
+            // Exit combat when timer expires
+            if (player.combatTimer <= 0) {
+                player.inCombat = false;
+            }
+        } else {
+            // Not in combat
+            player.inCombat = false;
+        }
+        
+        // Also enter combat when attacking
+        if (player.isAttacking) {
+            player.inCombat = true;
+            player.combatTimer = player.combatDuration;
+        }
+        
+        // Play sound when entering combat
+        if (!wasInCombat && player.inCombat) {
+            playSound('combatStart');
+            
+            // Switch to combat music
+            if (musicEnabled && audioContext) {
+                playMusic('combat');
+            }
+        }
+        
+        // Play sound when exiting combat
+        if (wasInCombat && !player.inCombat) {
+            playSound('combatEnd');
+            
+            // Switch back to main music
+            if (musicEnabled && audioContext) {
+                playMusic('main');
+            }
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'update combat state');
+    }
+}
+
 // Main game loop
 function gameLoop() {
     try {
@@ -1464,6 +1717,18 @@ function gameLoop() {
                 player.damageFlashTime--;
             }
         }
+        
+        // Update combo timer
+        if (player.combo > 0) {
+            player.comboTimer--;
+            if (player.comboTimer <= 0) {
+                // Reset combo when timer expires
+                player.combo = 0;
+            }
+        }
+        
+        // Update combat state
+        updateCombatState();
         
         // Update gamepad state
         if (gamepadConnected) {
@@ -2011,7 +2276,9 @@ function playSound(soundName) {
             damage: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
             attack: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
             enemyHit: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
-            enemyDefeat: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v'
+            enemyDefeat: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
+            combatStart: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
+            combatEnd: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v'
         };
         
         // Only play if we have the sound
@@ -2071,7 +2338,7 @@ function attackEnemies() {
         const attackCenterX = player.worldX + attackDirection.x * player.size * 0.5;
         const attackCenterY = player.worldY + attackDirection.y * player.size * 0.5;
         
-        // Track if we hit any enemies
+        // Track if we hit any enemy
         let hitAnyEnemy = false;
         
         // Check each enemy for collision with attack area
@@ -2086,8 +2353,29 @@ function attackEnemies() {
             // If enemy is in range, damage it
             // Use a more generous hit detection
             if (distance < player.attackRange + enemy.size) {
-                damageEnemy(i, player.attackDamage);
-                hitAnyEnemy = true;
+                // Calculate random damage
+                let damage = Math.floor(Math.random() * (player.maxDamage - player.minDamage + 1)) + player.minDamage;
+                
+                // Check for critical hit
+                let isCritical = Math.random() < player.criticalChance;
+                if (isCritical) {
+                    damage = Math.floor(damage * player.criticalMultiplier);
+                }
+                
+                // Check for enemy damage resistance
+                let damageResisted = false;
+                if (enemy.damageResistance && Math.random() < enemy.damageResistance) {
+                    // Damage was resisted
+                    damageResisted = true;
+                    damage = Math.max(1, Math.floor(damage / 2)); // Minimum 1 damage
+                }
+                
+                // Apply damage and get result
+                const damageResult = damageEnemy(i, damage, isCritical, damageResisted);
+                
+                if (damageResult.hit) {
+                    hitAnyEnemy = true;
+                }
             }
         }
         
@@ -2103,7 +2391,7 @@ function attackEnemies() {
 }
 
 // Damage an enemy
-function damageEnemy(enemyIndex, amount) {
+function damageEnemy(enemyIndex, amount, isCritical, wasResisted) {
     try {
         // Add health property to enemy if it doesn't exist
         if (typeof enemies[enemyIndex].health === 'undefined') {
@@ -2112,24 +2400,918 @@ function damageEnemy(enemyIndex, amount) {
             enemies[enemyIndex].health = ENEMY_PROPERTIES[enemyType].health;
         }
         
-        // Reduce enemy health
-        enemies[enemyIndex].health -= amount;
+        // Get enemy position for effects
+        const enemy = enemies[enemyIndex];
+        const enemyX = enemy.worldX;
+        const enemyY = enemy.worldY;
         
         // Add hit effect
-        enemies[enemyIndex].hitEffect = 10; // Flash for 10 frames
+        enemy.hitEffect = 10; // Flash for 10 frames
+        
+        // Reduce enemy health
+        enemy.health -= amount;
+        
+        // Show damage number
+        showDamageNumber(enemyX, enemyY, amount, isCritical, wasResisted);
         
         // Check if enemy is defeated
-        if (enemies[enemyIndex].health <= 0) {
+        if (enemy.health <= 0) {
+            // Get enemy type before removing
+            const enemyType = enemy.type;
+            
             // Remove the enemy
             enemies.splice(enemyIndex, 1);
             
             // Play defeat sound
             playSound('enemyDefeat');
+            
+            // Increment combo
+            player.combo++;
+            player.comboTimer = player.comboDuration;
+            
+            // Calculate score based on enemy type and combo
+            let baseScore;
+            switch (enemyType) {
+                case ENEMY_TYPES.GOBLIN:
+                    baseScore = 300; // Higher score for tougher enemy
+                    break;
+                case ENEMY_TYPES.SKELETON:
+                    baseScore = 200;
+                    break;
+                case ENEMY_TYPES.SLIME:
+                    baseScore = 100;
+                    break;
+                default:
+                    baseScore = 100;
+            }
+            
+            // Apply combo multiplier
+            const scoreGain = baseScore * player.combo;
+            
+            // Add to total score
+            player.score += scoreGain;
+            
+            // Add visual effects
+            addKillEffects(enemyX, enemyY, enemyType, scoreGain);
+            
+            return { hit: true, killed: true };
         }
+        
+        return { hit: true, killed: false };
     } catch (error) {
         errorHandler.handle(error, 'damage enemy');
+        return { hit: false, killed: false };
     }
+}
+
+// Show damage number
+function showDamageNumber(x, y, amount, isCritical, wasResisted) {
+    try {
+        // Determine color and size based on damage type
+        let color, size;
+        let text = amount.toString();
+        
+        if (isCritical) {
+            // Critical hit
+            color = '255, 255, 0'; // Yellow
+            size = 24;
+            text = 'CRIT! ' + text;
+        } else if (wasResisted) {
+            // Resisted hit
+            color = '150, 150, 150'; // Gray
+            size = 16;
+            text = text + ' (Resisted)';
+        } else {
+            // Normal hit
+            color = '255, 255, 255'; // White
+            size = 18;
+        }
+        
+        // Add random offset to prevent overlapping numbers
+        const offsetX = (Math.random() * 40) - 20;
+        
+        // Add text effect
+        player.killEffects.push({
+            type: 'text',
+            worldX: x + offsetX,
+            worldY: y - 30,
+            text: text,
+            size: size,
+            color: color,
+            lifetime: 45,
+            maxLifetime: 45
+        });
+    } catch (error) {
+        errorHandler.handle(error, 'show damage number');
+    }
+}
+
+// Add visual effects for enemy defeat
+function addKillEffects(x, y, enemyType, score) {
+    try {
+        // Add explosion effect
+        player.killEffects.push({
+            type: 'explosion',
+            worldX: x,
+            worldY: y,
+            size: PLAYER_SIZE * 1.5,
+            lifetime: 30,
+            maxLifetime: 30
+        });
+        
+        // Add score text effect
+        player.killEffects.push({
+            type: 'text',
+            worldX: x,
+            worldY: y - 20,
+            text: `+${score}`,
+            size: 20 + Math.min(player.combo * 2, 20), // Text gets bigger with higher combos
+            color: player.combo >= 5 ? '255, 255, 0' : '255, 255, 255', // Yellow for high combos
+            lifetime: 60,
+            maxLifetime: 60
+        });
+        
+        // Add combo text for combos of 2 or higher
+        if (player.combo >= 2) {
+            player.killEffects.push({
+                type: 'text',
+                worldX: x,
+                worldY: y - 50,
+                text: `${player.combo}x COMBO!`,
+                size: 16 + Math.min(player.combo * 3, 24),
+                color: player.combo >= 10 ? '255, 0, 255' : player.combo >= 5 ? '255, 255, 0' : '255, 165, 0',
+                lifetime: 60,
+                maxLifetime: 60
+            });
+        }
+        
+        // Add particle effect
+        const particles = [];
+        const particleCount = 20 + player.combo * 2; // More particles for higher combos
+        
+        // Create particles
+        for (let i = 0; i < particleCount; i++) {
+            // Random angle
+            const angle = Math.random() * Math.PI * 2;
+            // Random distance
+            const distance = Math.random() * PLAYER_SIZE * 2;
+            
+            // Particle color based on enemy type
+            let color;
+            switch (enemyType) {
+                case ENEMY_TYPES.GOBLIN:
+                    color = '76, 175, 80';
+                    break;
+                case ENEMY_TYPES.SKELETON:
+                    color = '224, 224, 224';
+                    break;
+                case ENEMY_TYPES.SLIME:
+                    color = '156, 39, 176';
+                    break;
+                default:
+                    color = '255, 255, 255';
+            }
+            
+            // Add particle
+            particles.push({
+                x: Math.cos(angle) * distance,
+                y: Math.sin(angle) * distance,
+                size: 2 + Math.random() * 4,
+                color: color
+            });
+        }
+        
+        // Add particle effect
+        player.killEffects.push({
+            type: 'particles',
+            worldX: x,
+            worldY: y,
+            particles: particles,
+            lifetime: 45,
+            maxLifetime: 45
+        });
+        
+        // Screen shake for high combos
+        if (player.combo >= 5) {
+            addScreenShake(player.combo * 0.5);
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'kill effects');
+    }
+}
+
+// Global variables for screen shake
+let screenShakeAmount = 0;
+let screenShakeDecay = 0.9;
+
+// Add screen shake effect
+function addScreenShake(amount) {
+    screenShakeAmount = Math.min(screenShakeAmount + amount, 20);
+}
+
+// Draw the score display
+function drawScoreDisplay() {
+    try {
+        // Position in top-right corner
+        const scoreX = canvas.width - 20;
+        const scoreY = 30;
+        
+        // Draw score text
+        ctx.font = 'bold 24px Arial';
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#FFFFFF';
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 3;
+        
+        // Draw score with outline
+        ctx.strokeText(`Score: ${player.score}`, scoreX, scoreY);
+        ctx.fillText(`Score: ${player.score}`, scoreX, scoreY);
+        
+        // Draw combo if active
+        if (player.combo > 1) {
+            const comboY = scoreY + 30;
+            
+            // Calculate combo timer percentage
+            const comboTimePercent = player.comboTimer / player.comboDuration;
+            
+            // Combo text gets larger with higher combos (up to a limit)
+            const comboSize = Math.min(24 + player.combo * 2, 48);
+            
+            // Combo text pulses
+            const pulseFactor = 1 + Math.sin(gameTime * 0.2) * 0.1;
+            
+            // Combo text color changes based on combo level
+            let comboColor;
+            if (player.combo >= 10) {
+                comboColor = '#FF00FF'; // Purple for 10+
+            } else if (player.combo >= 5) {
+                comboColor = '#FFFF00'; // Yellow for 5-9
+            } else {
+                comboColor = '#FF9900'; // Orange for 2-4
+            }
+            
+            // Draw combo text
+            ctx.font = `bold ${comboSize * pulseFactor}px Arial`;
+            ctx.fillStyle = comboColor;
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 4;
+            
+            ctx.strokeText(`${player.combo}x COMBO!`, scoreX, comboY);
+            ctx.fillText(`${player.combo}x COMBO!`, scoreX, comboY);
+            
+            // Draw combo timer bar
+            const barWidth = 100;
+            const barHeight = 6;
+            const barX = scoreX - barWidth;
+            const barY = comboY + 10;
+            
+            // Background
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.fillRect(barX, barY, barWidth, barHeight);
+            
+            // Timer fill
+            ctx.fillStyle = comboColor;
+            ctx.fillRect(barX, barY, barWidth * comboTimePercent, barHeight);
+            
+            // Border
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(barX, barY, barWidth, barHeight);
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'score display');
+    }
+}
+
+// Draw combat indicator
+function drawCombatIndicator() {
+    try {
+        // Calculate pulsing effect
+        const pulseIntensity = 0.2 + 0.1 * Math.sin(gameTime * 0.1);
+        
+        // Draw red border around the screen
+        const borderWidth = 10;
+        const borderOpacity = 0.3 + pulseIntensity;
+        
+        ctx.lineWidth = borderWidth;
+        ctx.strokeStyle = `rgba(255, 0, 0, ${borderOpacity})`;
+        
+        // Draw the border with rounded corners
+        ctx.beginPath();
+        ctx.roundRect(
+            borderWidth / 2, 
+            borderWidth / 2, 
+            canvas.width - borderWidth, 
+            canvas.height - borderWidth, 
+            10 // Corner radius
+        );
+        ctx.stroke();
+        
+        // Draw enemy indicators for nearby enemies
+        drawEnemyIndicators();
+        
+        // Draw combat text
+        const textY = 80;
+        const textOpacity = 0.7 + pulseIntensity;
+        
+        ctx.font = 'bold 24px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = `rgba(255, 0, 0, ${textOpacity})`;
+        ctx.strokeStyle = `rgba(0, 0, 0, ${textOpacity})`;
+        ctx.lineWidth = 3;
+        
+        // Pulse text size
+        const textSize = 24 + 4 * Math.sin(gameTime * 0.1);
+        ctx.font = `bold ${textSize}px Arial`;
+        
+        // Draw text with outline
+        ctx.strokeText('COMBAT MODE', canvas.width / 2, textY);
+        ctx.fillText('COMBAT MODE', canvas.width / 2, textY);
+        
+        // Draw number of nearby enemies
+        if (player.nearbyEnemies.length > 0) {
+            const enemyText = `${player.nearbyEnemies.length} ${player.nearbyEnemies.length === 1 ? 'enemy' : 'enemies'} nearby`;
+            ctx.font = 'bold 18px Arial';
+            ctx.strokeText(enemyText, canvas.width / 2, textY + 30);
+            ctx.fillText(enemyText, canvas.width / 2, textY + 30);
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'combat indicator');
+    }
+}
+
+// Draw indicators pointing to nearby enemies
+function drawEnemyIndicators() {
+    try {
+        // Only show indicators for enemies not on screen
+        for (const enemyInfo of player.nearbyEnemies) {
+            const enemy = enemies[enemyInfo.index];
+            
+            // Calculate enemy's screen position
+            const screenX = Math.round(enemy.worldX - cameraX);
+            const screenY = Math.round(enemy.worldY - cameraY);
+            
+            // Check if enemy is off screen
+            const isOffScreen = 
+                screenX + enemy.size < 0 || 
+                screenX > canvas.width || 
+                screenY + enemy.size < 0 || 
+                screenY > canvas.height;
+            
+            if (isOffScreen) {
+                // Calculate direction to enemy
+                const centerX = canvas.width / 2;
+                const centerY = canvas.height / 2;
+                
+                const dx = enemy.worldX - player.worldX;
+                const dy = enemy.worldY - player.worldY;
+                const angle = Math.atan2(dy, dx);
+                
+                // Calculate position on screen edge
+                const distance = Math.min(centerX, centerY) - 40;
+                const indicatorX = centerX + Math.cos(angle) * distance;
+                const indicatorY = centerY + Math.sin(angle) * distance;
+                
+                // Draw arrow pointing to enemy
+                drawEnemyArrow(indicatorX, indicatorY, angle, enemy.type);
+            }
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'enemy indicators');
+    }
+}
+
+// Draw an arrow pointing to an off-screen enemy
+function drawEnemyArrow(x, y, angle, enemyType) {
+    // Save context
+    ctx.save();
+    
+    // Translate to arrow position
+    ctx.translate(x, y);
+    
+    // Rotate to point in the right direction
+    ctx.rotate(angle);
+    
+    // Get color based on enemy type
+    let arrowColor;
+    switch (enemyType) {
+        case ENEMY_TYPES.GOBLIN:
+            arrowColor = '#4CAF50'; // Green
+            break;
+        case ENEMY_TYPES.SKELETON:
+            arrowColor = '#E0E0E0'; // Light gray
+            break;
+        case ENEMY_TYPES.SLIME:
+            arrowColor = '#9C27B0'; // Purple
+            break;
+        default:
+            arrowColor = '#FF0000'; // Red
+    }
+    
+    // Draw arrow
+    const arrowSize = 15;
+    
+    // Arrow head
+    ctx.beginPath();
+    ctx.moveTo(arrowSize, 0);
+    ctx.lineTo(-arrowSize/2, arrowSize/2);
+    ctx.lineTo(-arrowSize/2, -arrowSize/2);
+    ctx.closePath();
+    
+    // Fill and stroke
+    ctx.fillStyle = arrowColor;
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.stroke();
+    
+    // Pulse effect
+    const pulseSize = 5 + 3 * Math.sin(gameTime * 0.1);
+    ctx.beginPath();
+    ctx.arc(0, 0, pulseSize, 0, Math.PI * 2);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fill();
+    
+    // Restore context
+    ctx.restore();
 }
 
 // Initialize the game when the page loads
 window.addEventListener('load', init); 
+
+// Audio context for music and sounds
+let audioContext;
+let musicEnabled = true;
+let currentMusic = null;
+let musicVolume = 0.3; // Default music volume
+
+// Initialize audio context
+function initAudio() {
+    try {
+        // Create audio context
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        // Create music system
+        initMusicSystem();
+        
+        console.log("Audio system initialized");
+    } catch (error) {
+        errorHandler.handle(error, 'audio initialization');
+        console.warn("Audio could not be initialized. Music will be disabled.");
+        musicEnabled = false;
+    }
+}
+
+// Music system
+const musicSystem = {
+    context: null,
+    mainGainNode: null,
+    currentTrack: null,
+    isPlaying: false,
+    
+    // Music tracks
+    tracks: {
+        main: {
+            bpm: 120,
+            notes: [], // Will be generated
+            bassline: [], // Will be generated
+            drums: [] // Will be generated
+        },
+        combat: {
+            bpm: 150,
+            notes: [], // Will be generated
+            bassline: [], // Will be generated
+            drums: [] // Will be generated
+        }
+    }
+};
+
+// Initialize music system
+function initMusicSystem() {
+    try {
+        if (!audioContext) return;
+        
+        musicSystem.context = audioContext;
+        
+        // Create main gain node
+        musicSystem.mainGainNode = audioContext.createGain();
+        musicSystem.mainGainNode.gain.value = musicVolume;
+        musicSystem.mainGainNode.connect(audioContext.destination);
+        
+        // Generate music patterns
+        generateMusicPatterns();
+        
+        // Start with main theme
+        playMusic('main');
+        
+        console.log("Music system initialized");
+    } catch (error) {
+        errorHandler.handle(error, 'music system initialization');
+    }
+}
+
+// Generate music patterns for all tracks
+function generateMusicPatterns() {
+    try {
+        // Generate main theme (heroic, adventurous)
+        const mainMelody = [
+            { note: 'C4', duration: 0.5 },
+            { note: 'E4', duration: 0.5 },
+            { note: 'G4', duration: 0.5 },
+            { note: 'C5', duration: 0.5 },
+            { note: 'B4', duration: 0.5 },
+            { note: 'G4', duration: 0.5 },
+            { note: 'A4', duration: 0.5 },
+            { note: 'F4', duration: 0.5 },
+            { note: 'G4', duration: 1.0 },
+            { note: 'E4', duration: 0.5 },
+            { note: 'C4', duration: 0.5 },
+            { note: 'D4', duration: 0.5 },
+            { note: 'E4', duration: 0.5 },
+            { note: 'F4', duration: 0.5 },
+            { note: 'G4', duration: 1.0 }
+        ];
+        
+        const mainBassline = [
+            { note: 'C2', duration: 1.0 },
+            { note: 'G2', duration: 1.0 },
+            { note: 'A2', duration: 1.0 },
+            { note: 'F2', duration: 1.0 },
+            { note: 'C2', duration: 1.0 },
+            { note: 'G2', duration: 1.0 },
+            { note: 'F2', duration: 1.0 },
+            { note: 'G2', duration: 1.0 }
+        ];
+        
+        const mainDrums = [
+            { type: 'kick', time: 0.0 },
+            { type: 'hihat', time: 0.5 },
+            { type: 'snare', time: 1.0 },
+            { type: 'hihat', time: 1.5 },
+            { type: 'kick', time: 2.0 },
+            { type: 'hihat', time: 2.5 },
+            { type: 'snare', time: 3.0 },
+            { type: 'hihat', time: 3.5 }
+        ];
+        
+        // Generate combat theme (intense, faster)
+        const combatMelody = [
+            { note: 'E4', duration: 0.25 },
+            { note: 'E4', duration: 0.25 },
+            { note: 'G4', duration: 0.5 },
+            { note: 'E4', duration: 0.25 },
+            { note: 'E4', duration: 0.25 },
+            { note: 'A4', duration: 0.5 },
+            { note: 'E4', duration: 0.25 },
+            { note: 'E4', duration: 0.25 },
+            { note: 'B4', duration: 0.5 },
+            { note: 'A4', duration: 0.5 },
+            { note: 'G4', duration: 0.5 },
+            { note: 'E4', duration: 0.25 },
+            { note: 'E4', duration: 0.25 },
+            { note: 'G4', duration: 0.5 },
+            { note: 'A4', duration: 0.5 },
+            { note: 'B4', duration: 0.5 },
+            { note: 'C5', duration: 0.5 }
+        ];
+        
+        const combatBassline = [
+            { note: 'E2', duration: 0.5 },
+            { note: 'E2', duration: 0.5 },
+            { note: 'A2', duration: 0.5 },
+            { note: 'A2', duration: 0.5 },
+            { note: 'B2', duration: 0.5 },
+            { note: 'B2', duration: 0.5 },
+            { note: 'A2', duration: 0.5 },
+            { note: 'G2', duration: 0.5 },
+            { note: 'E2', duration: 0.5 },
+            { note: 'E2', duration: 0.5 },
+            { note: 'G2', duration: 0.5 },
+            { note: 'A2', duration: 0.5 },
+            { note: 'B2', duration: 0.5 },
+            { note: 'B2', duration: 0.5 },
+            { note: 'C3', duration: 0.5 },
+            { note: 'C3', duration: 0.5 }
+        ];
+        
+        const combatDrums = [
+            { type: 'kick', time: 0.0 },
+            { type: 'hihat', time: 0.25 },
+            { type: 'snare', time: 0.5 },
+            { type: 'hihat', time: 0.75 },
+            { type: 'kick', time: 1.0 },
+            { type: 'hihat', time: 1.25 },
+            { type: 'snare', time: 1.5 },
+            { type: 'hihat', time: 1.75 },
+            { type: 'kick', time: 2.0 },
+            { type: 'kick', time: 2.25 },
+            { type: 'snare', time: 2.5 },
+            { type: 'hihat', time: 2.75 },
+            { type: 'kick', time: 3.0 },
+            { type: 'hihat', time: 3.25 },
+            { type: 'snare', time: 3.5 },
+            { type: 'snare', time: 3.75 }
+        ];
+        
+        // Assign patterns to tracks
+        musicSystem.tracks.main.notes = mainMelody;
+        musicSystem.tracks.main.bassline = mainBassline;
+        musicSystem.tracks.main.drums = mainDrums;
+        
+        musicSystem.tracks.combat.notes = combatMelody;
+        musicSystem.tracks.combat.bassline = combatBassline;
+        musicSystem.tracks.combat.drums = combatDrums;
+        
+    } catch (error) {
+        errorHandler.handle(error, 'music pattern generation');
+    }
+}
+
+// Play a music track
+function playMusic(trackName) {
+    try {
+        if (!musicEnabled || !audioContext) return;
+        
+        // Stop current music if playing
+        if (musicSystem.isPlaying) {
+            stopMusic();
+        }
+        
+        // Get the track
+        const track = musicSystem.tracks[trackName];
+        if (!track) {
+            console.warn(`Music track "${trackName}" not found`);
+            return;
+        }
+        
+        musicSystem.currentTrack = trackName;
+        musicSystem.isPlaying = true;
+        
+        // Play the track
+        playMusicTrack(track);
+        
+        console.log(`Playing music track: ${trackName}`);
+    } catch (error) {
+        errorHandler.handle(error, 'play music');
+    }
+}
+
+// Stop the current music
+function stopMusic() {
+    try {
+        if (!musicSystem.isPlaying) return;
+        
+        // Stop all oscillators
+        if (musicSystem.melodyOscillators) {
+            musicSystem.melodyOscillators.forEach(osc => {
+                try {
+                    osc.stop();
+                    osc.disconnect();
+                } catch (e) {
+                    // Ignore errors from already stopped oscillators
+                }
+            });
+        }
+        
+        if (musicSystem.bassOscillators) {
+            musicSystem.bassOscillators.forEach(osc => {
+                try {
+                    osc.stop();
+                    osc.disconnect();
+                } catch (e) {
+                    // Ignore errors from already stopped oscillators
+                }
+            });
+        }
+        
+        // Clear any scheduled notes
+        if (musicSystem.scheduledNotes) {
+            musicSystem.scheduledNotes.forEach(note => clearTimeout(note));
+        }
+        
+        musicSystem.isPlaying = false;
+        musicSystem.melodyOscillators = [];
+        musicSystem.bassOscillators = [];
+        musicSystem.scheduledNotes = [];
+        
+        console.log("Music stopped");
+    } catch (error) {
+        errorHandler.handle(error, 'stop music');
+    }
+}
+
+// Play a music track with melody, bassline and drums
+function playMusicTrack(track) {
+    try {
+        const context = musicSystem.context;
+        const bpm = track.bpm;
+        const beatDuration = 60 / bpm;
+        
+        // Create oscillator arrays
+        musicSystem.melodyOscillators = [];
+        musicSystem.bassOscillators = [];
+        musicSystem.scheduledNotes = [];
+        
+        // Create gain nodes for each part
+        const melodyGain = context.createGain();
+        melodyGain.gain.value = 0.2;
+        melodyGain.connect(musicSystem.mainGainNode);
+        
+        const bassGain = context.createGain();
+        bassGain.gain.value = 0.3;
+        bassGain.connect(musicSystem.mainGainNode);
+        
+        const drumsGain = context.createGain();
+        drumsGain.gain.value = 0.4;
+        drumsGain.connect(musicSystem.mainGainNode);
+        
+        // Function to play a note with 8-bit sound
+        function playNote(note, time, duration, isBaseline = false) {
+            const oscillator = context.createOscillator();
+            const gainNode = context.createGain();
+            
+            // Use square wave for 8-bit sound
+            oscillator.type = isBaseline ? 'square' : 'square';
+            
+            // Convert note name to frequency
+            const freq = noteToFrequency(note);
+            oscillator.frequency.value = freq;
+            
+            // Connect oscillator to gain node
+            oscillator.connect(gainNode);
+            gainNode.connect(isBaseline ? bassGain : melodyGain);
+            
+            // Schedule note start and end
+            const startTime = context.currentTime + time;
+            const stopTime = startTime + duration * beatDuration * 0.9; // Slightly shorter for staccato effect
+            
+            // Apply envelope for 8-bit sound
+            gainNode.gain.setValueAtTime(0, startTime);
+            gainNode.gain.linearRampToValueAtTime(0.8, startTime + 0.01);
+            gainNode.gain.setValueAtTime(0.8, stopTime - 0.05);
+            gainNode.gain.linearRampToValueAtTime(0, stopTime);
+            
+            // Start and stop the oscillator
+            oscillator.start(startTime);
+            oscillator.stop(stopTime);
+            
+            // Store oscillator for later cleanup
+            if (isBaseline) {
+                musicSystem.bassOscillators.push(oscillator);
+            } else {
+                musicSystem.melodyOscillators.push(oscillator);
+            }
+        }
+        
+        // Function to play a drum sound
+        function playDrum(type, time) {
+            const oscillator = context.createOscillator();
+            const gainNode = context.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(drumsGain);
+            
+            const startTime = context.currentTime + time;
+            
+            if (type === 'kick') {
+                // Kick drum
+                oscillator.type = 'square';
+                oscillator.frequency.setValueAtTime(120, startTime);
+                oscillator.frequency.exponentialRampToValueAtTime(50, startTime + 0.1);
+                
+                gainNode.gain.setValueAtTime(1, startTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + 0.2);
+                
+                oscillator.start(startTime);
+                oscillator.stop(startTime + 0.2);
+            } else if (type === 'snare') {
+                // Snare drum (noise-based)
+                oscillator.type = 'square';
+                oscillator.frequency.setValueAtTime(100, startTime);
+                
+                gainNode.gain.setValueAtTime(0.8, startTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + 0.1);
+                
+                oscillator.start(startTime);
+                oscillator.stop(startTime + 0.1);
+                
+                // Add noise component
+                const noiseBuffer = createNoiseBuffer(context);
+                const noiseSource = context.createBufferSource();
+                const noiseGain = context.createGain();
+                
+                noiseSource.buffer = noiseBuffer;
+                noiseSource.connect(noiseGain);
+                noiseGain.connect(drumsGain);
+                
+                noiseGain.gain.setValueAtTime(0.5, startTime);
+                noiseGain.gain.exponentialRampToValueAtTime(0.01, startTime + 0.1);
+                
+                noiseSource.start(startTime);
+                noiseSource.stop(startTime + 0.1);
+            } else if (type === 'hihat') {
+                // Hi-hat (high-frequency noise)
+                oscillator.type = 'square';
+                oscillator.frequency.setValueAtTime(800, startTime);
+                
+                gainNode.gain.setValueAtTime(0.2, startTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + 0.05);
+                
+                oscillator.start(startTime);
+                oscillator.stop(startTime + 0.05);
+            }
+        }
+        
+        // Schedule melody notes
+        let melodyTime = 0;
+        track.notes.forEach(note => {
+            playNote(note.note, melodyTime, note.duration);
+            melodyTime += note.duration * beatDuration;
+        });
+        
+        // Schedule bassline notes
+        let bassTime = 0;
+        track.bassline.forEach(note => {
+            playNote(note.note, bassTime, note.duration, true);
+            bassTime += note.duration * beatDuration;
+        });
+        
+        // Schedule drum hits
+        track.drums.forEach(drum => {
+            playDrum(drum.type, drum.time * beatDuration);
+        });
+        
+        // Schedule loop to continue playing
+        const loopDuration = Math.max(melodyTime, bassTime);
+        const loopTimeout = setTimeout(() => {
+            if (musicSystem.isPlaying && musicSystem.currentTrack === track.name) {
+                playMusicTrack(track);
+            }
+        }, loopDuration * 1000);
+        
+        musicSystem.scheduledNotes.push(loopTimeout);
+    } catch (error) {
+        errorHandler.handle(error, 'play music track');
+    }
+}
+
+// Create a noise buffer for drum sounds
+function createNoiseBuffer(context) {
+    const bufferSize = context.sampleRate * 0.1; // 100ms buffer
+    const buffer = context.createBuffer(1, bufferSize, context.sampleRate);
+    const output = buffer.getChannelData(0);
+    
+    for (let i = 0; i < bufferSize; i++) {
+        output[i] = Math.random() * 2 - 1;
+    }
+    
+    return buffer;
+}
+
+// Convert note name to frequency
+function noteToFrequency(note) {
+    const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const octave = parseInt(note.slice(-1));
+    const noteName = note.slice(0, -1);
+    
+    const noteIndex = notes.indexOf(noteName);
+    if (noteIndex === -1) return 440; // Default to A4 if note not found
+    
+    // Calculate frequency using equal temperament formula
+    // A4 = 440Hz, each semitone is 2^(1/12) times the previous
+    const semitoneFromA4 = (octave - 4) * 12 + noteIndex - 9;
+    return 440 * Math.pow(2, semitoneFromA4 / 12);
+}
+
+// Toggle music on/off
+function toggleMusic() {
+    try {
+        if (!audioContext) {
+            initAudio();
+            return;
+        }
+        
+        musicEnabled = !musicEnabled;
+        
+        if (musicEnabled) {
+            // Resume audio context if suspended
+            if (audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+            
+            // Start playing appropriate music
+            if (player.inCombat) {
+                playMusic('combat');
+            } else {
+                playMusic('main');
+            }
+            
+            showMessage("Music enabled", 2000);
+        } else {
+            stopMusic();
+            showMessage("Music disabled", 2000);
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'toggle music');
+    }
+} 
