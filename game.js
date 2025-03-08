@@ -5,6 +5,29 @@ let VIEWPORT_TILES_Y = Math.ceil(window.innerHeight / TILE_SIZE) + 2; // Number 
 const CAMERA_SPEED = 5; // Speed of camera movement
 const PLAYER_SIZE = 24; // Size of the player character
 
+// Gamepad support
+let gamepads = {};
+let gamepadConnected = false;
+const GAMEPAD_DEADZONE = 0.2; // Ignore small joystick movements
+const GAMEPAD_BUTTON = {
+    A: 0,
+    B: 1,
+    X: 2,
+    Y: 3,
+    LEFT_BUMPER: 4,
+    RIGHT_BUMPER: 5,
+    LEFT_TRIGGER: 6,
+    RIGHT_TRIGGER: 7,
+    SELECT: 8,
+    START: 9,
+    LEFT_STICK: 10,
+    RIGHT_STICK: 11,
+    DPAD_UP: 12,
+    DPAD_DOWN: 13,
+    DPAD_LEFT: 14,
+    DPAD_RIGHT: 15
+};
+
 // Terrain types
 const TERRAIN = {
     WATER: 0,
@@ -54,8 +77,15 @@ let player = {
     maxHealth: 3, // Maximum health
     invulnerable: false, // Invulnerability after taking damage
     invulnerabilityTime: 0, // Time remaining for invulnerability
-    invulnerabilityDuration: 60, // Frames of invulnerability (1 second at 60fps)
-    damageFlashTime: 0 // Time remaining for damage flash effect
+    invulnerabilityDuration: 120, // Frames of invulnerability (2 seconds at 60fps)
+    damageFlashTime: 0, // Time remaining for damage flash effect
+    isAttacking: false, // Whether the player is currently attacking
+    attackCooldown: 0, // Cooldown time between attacks
+    attackCooldownDuration: 20, // Frames of cooldown (0.33 seconds at 60fps)
+    attackDuration: 15, // How long the attack animation lasts
+    attackTime: 0, // Current frame of the attack animation
+    attackRange: PLAYER_SIZE * 2.5, // Range of the sword attack (increased)
+    attackDamage: 2 // Damage dealt by the sword (increased)
 };
 
 // Enemy types
@@ -70,23 +100,26 @@ const ENEMY_PROPERTIES = {
     [ENEMY_TYPES.GOBLIN]: {
         color: '#4CAF50', // Green
         size: PLAYER_SIZE * 0.8,
-        speed: 1.2,
+        speed: 0.8, // Reduced speed
         followPlayer: true,
-        detectionRadius: TILE_SIZE * 5
+        detectionRadius: TILE_SIZE * 4, // Reduced detection radius
+        health: 1 // Weaker health
     },
     [ENEMY_TYPES.SKELETON]: {
         color: '#E0E0E0', // Light gray
         size: PLAYER_SIZE * 0.9,
-        speed: 0.8,
+        speed: 0.5, // Reduced speed
         followPlayer: true,
-        detectionRadius: TILE_SIZE * 7
+        detectionRadius: TILE_SIZE * 5, // Reduced detection radius
+        health: 2 // Default health
     },
     [ENEMY_TYPES.SLIME]: {
         color: '#9C27B0', // Purple
         size: PLAYER_SIZE * 0.7,
-        speed: 0.5,
+        speed: 0.3, // Reduced speed
         followPlayer: false,
-        detectionRadius: 0
+        detectionRadius: 0,
+        health: 1 // Weaker health
     }
 };
 
@@ -148,6 +181,9 @@ function init() {
             }
         });
         
+        // Set up gamepad support
+        initGamepadSupport();
+        
         // Generate tile images
         generateTileImages();
         
@@ -164,6 +200,53 @@ function init() {
         gameLoop();
     } catch (error) {
         errorHandler.handle(error, 'initialization');
+    }
+}
+
+// Initialize gamepad support
+function initGamepadSupport() {
+    try {
+        // Check if the browser supports the Gamepad API
+        if (navigator.getGamepads) {
+            console.log("Gamepad API supported");
+            
+            // Listen for gamepad connections
+            window.addEventListener("gamepadconnected", function(e) {
+                console.log("Gamepad connected:", e.gamepad.id);
+                gamepads[e.gamepad.index] = e.gamepad;
+                gamepadConnected = true;
+                
+                // Show a message to the user
+                showMessage("Controller connected: " + e.gamepad.id, 3000);
+            });
+            
+            // Listen for gamepad disconnections
+            window.addEventListener("gamepaddisconnected", function(e) {
+                console.log("Gamepad disconnected:", e.gamepad.id);
+                delete gamepads[e.gamepad.index];
+                
+                // Check if any gamepads are still connected
+                gamepadConnected = Object.keys(gamepads).length > 0;
+                
+                if (!gamepadConnected) {
+                    showMessage("Controller disconnected", 3000);
+                }
+            });
+            
+            // Check for already connected gamepads (in case the page was loaded with gamepads already connected)
+            const initialGamepads = navigator.getGamepads();
+            for (let i = 0; i < initialGamepads.length; i++) {
+                if (initialGamepads[i]) {
+                    gamepads[initialGamepads[i].index] = initialGamepads[i];
+                    gamepadConnected = true;
+                    console.log("Gamepad already connected:", initialGamepads[i].id);
+                }
+            }
+        } else {
+            console.log("Gamepad API not supported in this browser");
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'gamepad initialization');
     }
 }
 
@@ -532,38 +615,42 @@ function checkCollision(newX, newY) {
 // Handle user input
 function handleInput() {
     try {
-        // Track if player is moving
-        let isMoving = false;
-        let directionX = 0;
-        let directionY = 0;
-        
-        // Store original position
+        // Store original position for collision detection
         const originalX = player.worldX;
         const originalY = player.worldY;
-        let newX = originalX;
-        let newY = originalY;
         
-        // Calculate new position based on key presses
-        if (keysPressed['ArrowUp'] || keysPressed['w'] || keysPressed['W']) {
-            newY -= player.speed;
-            isMoving = true;
-            directionY = -1;
+        // Get keyboard input
+        const keyboardInput = getKeyboardInput();
+        
+        // Get gamepad input
+        const gamepadInput = getGamepadInput();
+        
+        // Combine inputs (gamepad takes precedence if both are used)
+        let directionX = gamepadInput.x !== 0 ? gamepadInput.x : keyboardInput.x;
+        let directionY = gamepadInput.y !== 0 ? gamepadInput.y : keyboardInput.y;
+        let attack = gamepadInput.attack || keyboardInput.attack;
+        
+        // Normalize diagonal movement
+        if (directionX !== 0 && directionY !== 0) {
+            const length = Math.sqrt(directionX * directionX + directionY * directionY);
+            directionX /= length;
+            directionY /= length;
         }
-        if (keysPressed['ArrowDown'] || keysPressed['s'] || keysPressed['S']) {
-            newY += player.speed;
-            isMoving = true;
-            directionY = 1;
+        
+        // Check if player is moving
+        const isMoving = directionX !== 0 || directionY !== 0;
+        
+        // Handle attack input
+        if (attack && player.attackCooldown <= 0 && !player.isAttacking) {
+            startAttack();
         }
-        if (keysPressed['ArrowLeft'] || keysPressed['a'] || keysPressed['A']) {
-            newX -= player.speed;
-            isMoving = true;
-            directionX = -1;
-        }
-        if (keysPressed['ArrowRight'] || keysPressed['d'] || keysPressed['D']) {
-            newX += player.speed;
-            isMoving = true;
-            directionX = 1;
-        }
+        
+        // Update attack state
+        updateAttackState();
+        
+        // Calculate new position
+        const newX = player.worldX + directionX * player.speed;
+        const newY = player.worldY + directionY * player.speed;
         
         // Debug key presses
         if (isMoving && gameTime % 60 === 0) {
@@ -611,6 +698,104 @@ function handleInput() {
     } catch (error) {
         errorHandler.handle(error, 'input handling');
     }
+}
+
+// Get keyboard input direction
+function getKeyboardInput() {
+    let directionX = 0;
+    let directionY = 0;
+    let attack = false;
+    
+    // Check arrow keys and WASD
+    if (keysPressed['ArrowLeft'] || keysPressed['a'] || keysPressed['A']) {
+        directionX -= 1;
+    }
+    if (keysPressed['ArrowRight'] || keysPressed['d'] || keysPressed['D']) {
+        directionX += 1;
+    }
+    if (keysPressed['ArrowUp'] || keysPressed['w'] || keysPressed['W']) {
+        directionY -= 1;
+    }
+    if (keysPressed['ArrowDown'] || keysPressed['s'] || keysPressed['S']) {
+        directionY += 1;
+    }
+    
+    // Check for attack input (Space key)
+    if (keysPressed[' '] || keysPressed['Spacebar']) {
+        attack = true;
+    }
+    
+    return { x: directionX, y: directionY, attack: attack };
+}
+
+// Get gamepad input direction
+function getGamepadInput() {
+    let directionX = 0;
+    let directionY = 0;
+    let attack = false;
+    
+    if (gamepadConnected) {
+        try {
+            // Get the latest gamepad state
+            const gamepadsArray = navigator.getGamepads();
+            
+            // Use the first connected gamepad
+            let activeGamepad = null;
+            for (let i = 0; i < gamepadsArray.length; i++) {
+                if (gamepadsArray[i]) {
+                    activeGamepad = gamepadsArray[i];
+                    break;
+                }
+            }
+            
+            if (activeGamepad) {
+                // Left analog stick
+                const leftStickX = activeGamepad.axes[0];
+                const leftStickY = activeGamepad.axes[1];
+                
+                // Apply deadzone to avoid drift
+                if (Math.abs(leftStickX) > GAMEPAD_DEADZONE) {
+                    directionX = leftStickX;
+                }
+                if (Math.abs(leftStickY) > GAMEPAD_DEADZONE) {
+                    directionY = leftStickY;
+                }
+                
+                // D-pad
+                if (activeGamepad.buttons[GAMEPAD_BUTTON.DPAD_LEFT].pressed) {
+                    directionX = -1;
+                } else if (activeGamepad.buttons[GAMEPAD_BUTTON.DPAD_RIGHT].pressed) {
+                    directionX = 1;
+                }
+                
+                if (activeGamepad.buttons[GAMEPAD_BUTTON.DPAD_UP].pressed) {
+                    directionY = -1;
+                } else if (activeGamepad.buttons[GAMEPAD_BUTTON.DPAD_DOWN].pressed) {
+                    directionY = 1;
+                }
+                
+                // Attack with X button or right trigger
+                if (activeGamepad.buttons[GAMEPAD_BUTTON.X].pressed || 
+                    activeGamepad.buttons[GAMEPAD_BUTTON.RIGHT_TRIGGER].pressed) {
+                    attack = true;
+                }
+                
+                // Toggle minimap with Y button
+                if (activeGamepad.buttons[GAMEPAD_BUTTON.Y].pressed && !activeGamepad.buttons[GAMEPAD_BUTTON.Y].wasPressed) {
+                    minimapVisible = !minimapVisible;
+                }
+                
+                // Store button states for next frame
+                for (let i = 0; i < activeGamepad.buttons.length; i++) {
+                    activeGamepad.buttons[i].wasPressed = activeGamepad.buttons[i].pressed;
+                }
+            }
+        } catch (error) {
+            errorHandler.handle(error, 'gamepad input');
+        }
+    }
+    
+    return { x: directionX, y: directionY, attack: attack };
 }
 
 // Update camera position to follow player
@@ -836,6 +1021,9 @@ function drawPlayer() {
         ctx.fillStyle = '#CC0000'; // Red plume
         ctx.fill();
         
+        // Draw sword with attack animation
+        drawPlayerSword(centerX, centerY, bounceOffset);
+        
         // Shield (if facing left)
         if (player.lastDirection.x < 0) {
             ctx.beginPath();
@@ -859,32 +1047,6 @@ function drawPlayer() {
             ctx.closePath();
             ctx.fillStyle = '#FFCC00'; // Gold emblem
             ctx.fill();
-        }
-        
-        // Sword (if facing right)
-        if (player.lastDirection.x >= 0) {
-            // Sword handle
-            ctx.beginPath();
-            ctx.rect(
-                centerX + player.size/2, 
-                centerY - bounceOffset - player.size/8, 
-                player.size/4, 
-                player.size/4
-            );
-            ctx.fillStyle = '#8B4513'; // Brown handle
-            ctx.fill();
-            
-            // Sword blade
-            ctx.beginPath();
-            ctx.moveTo(centerX + player.size/2 + player.size/4, centerY - bounceOffset);
-            ctx.lineTo(centerX + player.size/2 + player.size/4 + player.size/2, centerY - bounceOffset - player.size/6);
-            ctx.lineTo(centerX + player.size/2 + player.size/4 + player.size/2, centerY - bounceOffset + player.size/6);
-            ctx.closePath();
-            ctx.fillStyle = '#CCCCCC'; // Silver blade
-            ctx.fill();
-            ctx.strokeStyle = '#999999';
-            ctx.lineWidth = 1;
-            ctx.stroke();
         }
         
         // Eyes (visible through visor)
@@ -938,8 +1100,132 @@ function drawPlayer() {
             );
             ctx.fill();
         }
+        
+        // Draw attack effect if attacking
+        if (player.isAttacking) {
+            drawAttackEffect(centerX, centerY);
+        }
     } catch (error) {
         errorHandler.handle(error, 'drawPlayer');
+    }
+}
+
+// Draw the player's sword with attack animation
+function drawPlayerSword(centerX, centerY, bounceOffset) {
+    try {
+        // Only draw sword if facing right or attacking
+        if (player.lastDirection.x >= 0 || player.isAttacking) {
+            // Calculate sword position and rotation based on attack state
+            let swordRotation = 0;
+            let swordExtension = 0;
+            
+            if (player.isAttacking) {
+                // Calculate attack progress (0 to 1)
+                const attackProgress = player.attackTime / player.attackDuration;
+                
+                // Sword swings in an arc during attack
+                swordRotation = Math.sin(attackProgress * Math.PI) * Math.PI * 0.75;
+                
+                // Sword extends further during attack
+                swordExtension = player.size * 0.3 * Math.sin(attackProgress * Math.PI);
+            }
+            
+            // Base position for sword (right side of player)
+            let swordBaseX = centerX + player.size/2;
+            let swordBaseY = centerY - bounceOffset - player.size/8;
+            
+            // Adjust sword position based on player direction
+            if (player.lastDirection.x < 0 && player.isAttacking) {
+                // Flip sword to left side during attack if facing left
+                swordBaseX = centerX - player.size/2;
+                swordRotation = -swordRotation; // Reverse rotation
+            }
+            
+            // Calculate sword handle position
+            const handleLength = player.size/4;
+            const handleWidth = player.size/4;
+            
+            // Save the current context state
+            ctx.save();
+            
+            // Translate to the sword base position
+            ctx.translate(swordBaseX, swordBaseY);
+            
+            // Rotate the context
+            ctx.rotate(swordRotation);
+            
+            // Draw sword handle
+            ctx.beginPath();
+            ctx.rect(
+                0, 
+                -handleWidth/2, 
+                handleLength, 
+                handleWidth
+            );
+            ctx.fillStyle = '#8B4513'; // Brown handle
+            ctx.fill();
+            ctx.strokeStyle = '#5A3A1A';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            // Draw sword blade
+            const bladeLength = player.size/2 + swordExtension;
+            const bladeWidth = player.size/6;
+            
+            ctx.beginPath();
+            ctx.moveTo(handleLength, 0);
+            ctx.lineTo(handleLength + bladeLength, -bladeWidth/2);
+            ctx.lineTo(handleLength + bladeLength + player.size/6, 0);
+            ctx.lineTo(handleLength + bladeLength, bladeWidth/2);
+            ctx.closePath();
+            ctx.fillStyle = '#CCCCCC'; // Silver blade
+            ctx.fill();
+            ctx.strokeStyle = '#999999';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            // Restore the context
+            ctx.restore();
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'draw player sword');
+    }
+}
+
+// Draw attack effect
+function drawAttackEffect(centerX, centerY) {
+    try {
+        // Calculate attack progress (0 to 1)
+        const attackProgress = player.attackTime / player.attackDuration;
+        
+        // Calculate attack direction
+        const attackAngle = Math.atan2(player.lastDirection.y, player.lastDirection.x);
+        
+        // Calculate attack radius
+        const attackRadius = player.attackRange * attackProgress;
+        
+        // Draw attack arc
+        ctx.beginPath();
+        ctx.arc(
+            centerX, 
+            centerY, 
+            attackRadius, 
+            attackAngle - Math.PI/3, 
+            attackAngle + Math.PI/3
+        );
+        ctx.lineTo(centerX, centerY);
+        ctx.closePath();
+        
+        // Fill with semi-transparent white
+        ctx.fillStyle = `rgba(255, 255, 255, ${0.5 * (1 - attackProgress)})`;
+        ctx.fill();
+        
+        // Draw outline
+        ctx.strokeStyle = `rgba(255, 255, 255, ${0.8 * (1 - attackProgress)})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    } catch (error) {
+        errorHandler.handle(error, 'draw attack effect');
     }
 }
 
@@ -1179,6 +1465,11 @@ function gameLoop() {
             }
         }
         
+        // Update gamepad state
+        if (gamepadConnected) {
+            updateGamepadState();
+        }
+        
         // Process input and update game state
         handleInput();
         
@@ -1194,6 +1485,40 @@ function gameLoop() {
         errorHandler.handle(error, 'game loop');
         // Even if there's an error, try to continue the game loop
         requestAnimationFrame(gameLoop);
+    }
+}
+
+// Update gamepad state
+function updateGamepadState() {
+    try {
+        // Get the latest gamepad state
+        const gamepadsArray = navigator.getGamepads();
+        
+        // Update our gamepads object with the latest state
+        for (let i = 0; i < gamepadsArray.length; i++) {
+            if (gamepadsArray[i]) {
+                // Store the previous button states before updating
+                if (!gamepads[gamepadsArray[i].index]) {
+                    gamepads[gamepadsArray[i].index] = gamepadsArray[i];
+                    
+                    // Initialize wasPressed for all buttons
+                    for (let j = 0; j < gamepadsArray[i].buttons.length; j++) {
+                        gamepadsArray[i].buttons[j].wasPressed = false;
+                    }
+                } else {
+                    // Store previous button states
+                    for (let j = 0; j < gamepadsArray[i].buttons.length; j++) {
+                        gamepadsArray[i].buttons[j].wasPressed = 
+                            gamepads[gamepadsArray[i].index].buttons[j].pressed;
+                    }
+                }
+                
+                // Update with new gamepad state
+                gamepads[gamepadsArray[i].index] = gamepadsArray[i];
+            }
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'gamepad state update');
     }
 }
 
@@ -1250,7 +1575,9 @@ function spawnEnemies() {
                     animationFrame: Math.random() * 100, // Random starting animation frame
                     isMoving: false,
                     moveDirection: { x: 0, y: 0 },
-                    lastMoveChange: 0
+                    lastMoveChange: 0,
+                    health: ENEMY_PROPERTIES[enemyType].health, // Initialize health
+                    hitEffect: 0
                 };
                 
                 enemies.push(enemy);
@@ -1273,6 +1600,11 @@ function updateEnemies() {
             enemy.animationFrame += 0.2;
             if (enemy.animationFrame > 1000) {
                 enemy.animationFrame = 0;
+            }
+            
+            // Update hit effect
+            if (enemy.hitEffect > 0) {
+                enemy.hitEffect--;
             }
             
             // Check for collision with player
@@ -1384,6 +1716,11 @@ function drawEnemies() {
             // Add a slight bounce effect when moving
             const bounceOffset = enemy.isMoving ? Math.sin(enemy.animationFrame * 0.3) * 2 : 0;
             
+            // Skip drawing every other frame if hit effect is active
+            if (enemy.hitEffect > 0 && enemy.hitEffect % 2 === 0) {
+                continue;
+            }
+            
             // Draw enemy based on type
             switch (enemy.type) {
                 case ENEMY_TYPES.GOBLIN:
@@ -1396,9 +1733,40 @@ function drawEnemies() {
                     drawSlime(enemy, centerX, centerY, bounceOffset);
                     break;
             }
+            
+            // Always draw health bar
+            drawEnemyHealthBar(enemy, centerX, centerY);
         }
     } catch (error) {
         errorHandler.handle(error, 'enemy rendering');
+    }
+}
+
+// Draw enemy health bar
+function drawEnemyHealthBar(enemy, centerX, centerY) {
+    try {
+        const barWidth = enemy.size;
+        const barHeight = 4;
+        const barY = centerY - enemy.size/2 - 10;
+        
+        // Get max health for this enemy type
+        const maxHealth = ENEMY_PROPERTIES[enemy.type].health;
+        
+        // Background (empty health)
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(centerX - barWidth/2, barY, barWidth, barHeight);
+        
+        // Health amount
+        const healthPercent = enemy.health / maxHealth;
+        ctx.fillStyle = '#FF0000';
+        ctx.fillRect(centerX - barWidth/2, barY, barWidth * healthPercent, barHeight);
+        
+        // Border
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(centerX - barWidth/2, barY, barWidth, barHeight);
+    } catch (error) {
+        errorHandler.handle(error, 'enemy health bar');
     }
 }
 
@@ -1641,7 +2009,9 @@ function playSound(soundName) {
         // Simple audio implementation
         const sounds = {
             damage: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
-            // Add more sounds as needed
+            attack: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
+            enemyHit: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
+            enemyDefeat: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v'
         };
         
         // Only play if we have the sound
@@ -1652,6 +2022,112 @@ function playSound(soundName) {
         }
     } catch (error) {
         errorHandler.handle(error, 'play sound');
+    }
+}
+
+// Start a sword attack
+function startAttack() {
+    try {
+        player.isAttacking = true;
+        player.attackTime = player.attackDuration;
+        
+        // Check for enemies in attack range
+        attackEnemies();
+    } catch (error) {
+        errorHandler.handle(error, 'start attack');
+    }
+}
+
+// Update the attack state
+function updateAttackState() {
+    try {
+        // Update attack cooldown
+        if (player.attackCooldown > 0) {
+            player.attackCooldown--;
+        }
+        
+        // Update attack animation
+        if (player.isAttacking) {
+            player.attackTime--;
+            
+            // Attack is finished
+            if (player.attackTime <= 0) {
+                player.isAttacking = false;
+                player.attackCooldown = player.attackCooldownDuration;
+            }
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'update attack state');
+    }
+}
+
+// Attack enemies in range
+function attackEnemies() {
+    try {
+        // Calculate attack area based on player direction
+        const attackDirection = player.lastDirection;
+        
+        // Use a wider attack area
+        const attackCenterX = player.worldX + attackDirection.x * player.size * 0.5;
+        const attackCenterY = player.worldY + attackDirection.y * player.size * 0.5;
+        
+        // Track if we hit any enemies
+        let hitAnyEnemy = false;
+        
+        // Check each enemy for collision with attack area
+        for (let i = 0; i < enemies.length; i++) {
+            const enemy = enemies[i];
+            
+            // Calculate distance from attack center to enemy
+            const dx = enemy.worldX - attackCenterX;
+            const dy = enemy.worldY - attackCenterY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            // If enemy is in range, damage it
+            // Use a more generous hit detection
+            if (distance < player.attackRange + enemy.size) {
+                damageEnemy(i, player.attackDamage);
+                hitAnyEnemy = true;
+            }
+        }
+        
+        // Play different sound based on whether we hit anything
+        if (hitAnyEnemy) {
+            playSound('enemyHit');
+        } else {
+            playSound('attack');
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'attack enemies');
+    }
+}
+
+// Damage an enemy
+function damageEnemy(enemyIndex, amount) {
+    try {
+        // Add health property to enemy if it doesn't exist
+        if (typeof enemies[enemyIndex].health === 'undefined') {
+            // Use the predefined health from ENEMY_PROPERTIES
+            const enemyType = enemies[enemyIndex].type;
+            enemies[enemyIndex].health = ENEMY_PROPERTIES[enemyType].health;
+        }
+        
+        // Reduce enemy health
+        enemies[enemyIndex].health -= amount;
+        
+        // Add hit effect
+        enemies[enemyIndex].hitEffect = 10; // Flash for 10 frames
+        
+        // Check if enemy is defeated
+        if (enemies[enemyIndex].health <= 0) {
+            // Remove the enemy
+            enemies.splice(enemyIndex, 1);
+            
+            // Play defeat sound
+            playSound('enemyDefeat');
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'damage enemy');
     }
 }
 
