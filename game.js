@@ -199,14 +199,6 @@ function init() {
             }
         });
         
-        // Add music controls
-        window.addEventListener('keydown', e => {
-            // Toggle music with 'P' key
-            if (e.key === 'p' || e.key === 'P') {
-                toggleMusic();
-            }
-        });
-        
         // Set up gamepad support
         initGamepadSupport();
         
@@ -231,7 +223,7 @@ function init() {
         gameLoop();
         
         // Show welcome message with instructions
-        showMessage("Welcome to Procedural World! Press P to toggle music.", 5000);
+        showMessage("Welcome to Procedural World!", 5000);
     } catch (error) {
         errorHandler.handle(error, 'initialization');
     }
@@ -955,6 +947,115 @@ function drawKillEffects() {
                 continue;
             }
             
+            // Handle heart pickup physics and collision with player
+            if (effect.type === 'heart' && !effect.collected) {
+                // Update pulse animation
+                effect.pulseTime = (effect.pulseTime || 0) + 1;
+                
+                // Apply physics to heart
+                if (!effect.grounded) {
+                    // Apply gravity
+                    effect.velocityY += effect.gravity;
+                    
+                    // Apply friction
+                    effect.velocityX *= effect.friction;
+                    effect.velocityY *= effect.friction;
+                    
+                    // Update position
+                    effect.worldX += effect.velocityX;
+                    effect.worldY += effect.velocityY;
+                    
+                    // Check for collision with ground (simulate ground at the same Y level as the heart was spawned)
+                    const groundY = effect.worldY;
+                    if (effect.velocityY > 0 && Math.abs(effect.velocityY) < 0.2) {
+                        effect.grounded = true;
+                        effect.bounceTime = 0;
+                    }
+                    
+                    // Bounce if hitting the ground
+                    if (effect.worldY > groundY && effect.velocityY > 0) {
+                        effect.worldY = groundY;
+                        effect.velocityY = -effect.velocityY * effect.bounce;
+                        
+                        // If bounce is too small, stop bouncing
+                        if (Math.abs(effect.velocityY) < 0.5) {
+                            effect.velocityY = 0;
+                            effect.grounded = true;
+                        }
+                    }
+                } else {
+                    // Heart is on the ground, make it hover slightly
+                    effect.bounceTime += 0.05;
+                    effect.bounceHeight = Math.sin(effect.bounceTime) * 3;
+                    effect.worldY = effect.worldY + effect.bounceHeight;
+                }
+                
+                // Check for collision with player
+                const distX = effect.worldX - player.worldX;
+                const distY = effect.worldY - player.worldY;
+                const distance = Math.sqrt(distX * distX + distY * distY);
+                
+                // If player touches the heart
+                if (distance < player.size + effect.size / 2) {
+                    // Mark as collected
+                    effect.collected = true;
+                    
+                    // Heal player by 1 heart
+                    if (player.health < player.maxHealth) {
+                        player.health++;
+                        
+                        // Play heal sound
+                        playSound('heal');
+                        
+                        // Add healing text effect
+                        player.killEffects.push({
+                            type: 'text',
+                            worldX: player.worldX,
+                            worldY: player.worldY - 40,
+                            text: '+1 HEART',
+                            size: 24,
+                            color: '255, 0, 0', // Red for heart
+                            lifetime: 60,
+                            maxLifetime: 60
+                        });
+                        
+                        // Add heart collection particles
+                        const particles = [];
+                        const particleCount = 15;
+                        
+                        // Create particles
+                        for (let j = 0; j < particleCount; j++) {
+                            const angle = Math.random() * Math.PI * 2;
+                            const speed = 0.5 + Math.random() * 1.5;
+                            
+                            particles.push({
+                                x: Math.cos(angle) * speed * 5,
+                                y: Math.sin(angle) * speed * 5,
+                                size: 2 + Math.random() * 3,
+                                color: '255, 0, 0' // Red particles
+                            });
+                        }
+                        
+                        // Add particle effect
+                        player.killEffects.push({
+                            type: 'particles',
+                            worldX: effect.worldX,
+                            worldY: effect.worldY,
+                            particles: particles,
+                            lifetime: 30,
+                            maxLifetime: 30
+                        });
+                    }
+                    
+                    // Remove the heart effect
+                    player.killEffects.splice(i, 1);
+                    continue;
+                }
+                
+                // Make heart glow when player is nearby to indicate it can be collected
+                effect.playerNearby = distance < TILE_SIZE * 3;
+            }
+            
             // Draw based on effect type
             switch (effect.type) {
                 case 'explosion':
@@ -966,10 +1067,95 @@ function drawKillEffects() {
                 case 'particles':
                     drawParticleEffect(effect, screenX, screenY);
                     break;
+                case 'heart':
+                    drawHeartEffect(effect, screenX, screenY);
+                    break;
             }
         }
     } catch (error) {
         errorHandler.handle(error, 'kill effects');
+    }
+}
+
+// Draw a heart pickup effect
+function drawHeartEffect(effect, x, y) {
+    try {
+        // Skip if already collected
+        if (effect.collected) return;
+        
+        // Calculate pulse size modifier (make heart "beat")
+        const pulse = Math.sin(effect.pulseTime * 0.1) * 0.2 + 1;
+        
+        // Calculate fade-in and fade-out
+        let alpha = 1;
+        if (effect.lifetime < 60) {
+            // Fade out in the last second
+            alpha = effect.lifetime / 60;
+        } else if (effect.maxLifetime - effect.lifetime < 30) {
+            // Fade in at the beginning
+            alpha = (effect.maxLifetime - effect.lifetime) / 30;
+        }
+        
+        // Determine if player is nearby for visual effect
+        const isPlayerNearby = effect.playerNearby;
+        
+        // Draw shadow under the heart
+        ctx.beginPath();
+        ctx.ellipse(x, y + effect.size * 0.4, effect.size * 0.6, effect.size * 0.2, 0, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(0, 0, 0, ${alpha * 0.3})`;
+        ctx.fill();
+        
+        // Draw the heart with enhanced effects
+        const size = effect.size * pulse;
+        
+        // Add a glowing effect when player is nearby
+        if (isPlayerNearby) {
+            // Outer glow
+            ctx.globalAlpha = alpha * 0.7;
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = 'rgba(255, 215, 0, 0.8)'; // Golden glow
+            drawHeart(x, y, size * 1.3, 'rgba(255, 215, 0, 0.3)');
+            
+            // Inner glow
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = 'rgba(255, 0, 0, 0.8)';
+            drawHeart(x, y, size * 1.1, 'rgba(255, 100, 100, 0.5)');
+            ctx.shadowBlur = 0;
+        } else {
+            // Normal glow
+            ctx.globalAlpha = alpha * 0.5;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = 'rgba(255, 0, 0, 0.6)';
+            drawHeart(x, y, size * 1.1, 'rgba(255, 100, 100, 0.4)');
+            ctx.shadowBlur = 0;
+        }
+        
+        // Reset alpha
+        ctx.globalAlpha = alpha;
+        
+        // Draw the main heart
+        drawHeart(x, y, size, `rgba(255, 0, 0, ${alpha})`);
+        
+        // Draw a shine effect on the heart
+        ctx.beginPath();
+        ctx.arc(x - size * 0.2, y - size * 0.2, size * 0.15, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255, 255, 255, ${alpha * 0.7})`;
+        ctx.fill();
+        
+        // Draw "Collect me!" text above the heart when player is nearby
+        if (isPlayerNearby) {
+            const textY = y - size - 15;
+            ctx.font = 'bold 14px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = `rgba(255, 255, 255, ${alpha * (0.5 + 0.5 * Math.sin(effect.pulseTime * 0.2))})`;
+            ctx.fillText('Collect!', x, textY);
+        }
+        
+        // Reset global settings
+        ctx.globalAlpha = 1;
+        ctx.shadowBlur = 0;
+    } catch (error) {
+        errorHandler.handle(error, 'heart effect');
     }
 }
 
@@ -2271,24 +2457,52 @@ function showMessage(text, duration) {
 // Play a sound effect
 function playSound(soundName) {
     try {
-        // Simple audio implementation
-        const sounds = {
-            damage: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
-            attack: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
-            enemyHit: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
-            enemyDefeat: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
-            combatStart: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
-            combatEnd: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v'
-        };
+        if (!audioContext) return;
+        
+        // Check sound timers for rate-limited sounds
+        if (soundName === 'enemyNearby') {
+            if (soundTimers.enemyNearby > 0) {
+                return; // Skip if too soon
+            }
+            soundTimers.enemyNearby = soundTimers.enemyNearbyInterval;
+        }
         
         // Only play if we have the sound
         if (sounds[soundName]) {
             const audio = new Audio(sounds[soundName]);
-            audio.volume = 0.3; // Lower volume
+            audio.volume = soundVolume;
             audio.play().catch(e => console.log('Audio play error:', e));
         }
     } catch (error) {
-        errorHandler.handle(error, 'play sound');
+        console.error(`Error in play sound: ${error.message}`);
+    }
+}
+
+// Update sound timers
+function updateSoundTimers() {
+    // Decrease all sound timers
+    for (const timer in soundTimers) {
+        if (typeof soundTimers[timer] === 'number' && soundTimers[timer] > 0) {
+            soundTimers[timer]--;
+        }
+    }
+}
+
+// Play enemy nearby sound if enemies are close
+function playEnemyNearbySound(nearbyEnemies) {
+    if (nearbyEnemies && nearbyEnemies.length > 0) {
+        // Find closest enemy
+        let closestDistance = Infinity;
+        for (const enemy of nearbyEnemies) {
+            if (enemy.distance < closestDistance) {
+                closestDistance = enemy.distance;
+            }
+        }
+        
+        // Play sound if very close (within 2 tiles)
+        if (closestDistance < 64) {
+            playSound('enemyNearby');
+        }
     }
 }
 
@@ -2543,6 +2757,72 @@ function addKillEffects(x, y, enemyType, score) {
                 lifetime: 60,
                 maxLifetime: 60
             });
+        }
+        
+        // Chance to drop a heart based on enemy type and player's health
+        let heartDropChance = 0;
+        
+        // Higher chance to drop hearts when player health is low
+        if (player.health < player.maxHealth) {
+            // Base drop chance depends on enemy type
+            switch (enemyType) {
+                case ENEMY_TYPES.GOBLIN:
+                    heartDropChance = 0.25; // 25% chance for tougher enemies
+                    break;
+                case ENEMY_TYPES.SKELETON:
+                    heartDropChance = 0.15; // 15% chance for medium enemies
+                    break;
+                case ENEMY_TYPES.SLIME:
+                    heartDropChance = 0.10; // 10% chance for weak enemies
+                    break;
+                default:
+                    heartDropChance = 0.10;
+            }
+            
+            // Increase chance when health is very low
+            if (player.health === 1) {
+                heartDropChance *= 2; // Double the chance when at 1 heart
+            }
+            
+            // Check if a heart should drop
+            if (Math.random() < heartDropChance) {
+                // Generate random velocity for the heart to make it bounce
+                const angle = Math.random() * Math.PI * 2;
+                const speed = 1 + Math.random() * 2;
+                
+                // Add heart pickup effect as a physical item
+                player.killEffects.push({
+                    type: 'heart',
+                    worldX: x,
+                    worldY: y,
+                    size: PLAYER_SIZE * 0.8,
+                    lifetime: 600, // Heart stays for 10 seconds
+                    maxLifetime: 600,
+                    collected: false,
+                    pulseTime: 0,
+                    // Physics properties
+                    velocityX: Math.cos(angle) * speed,
+                    velocityY: Math.sin(angle) * speed,
+                    gravity: 0.1,
+                    bounce: 0.6,
+                    friction: 0.95,
+                    grounded: false,
+                    bounceHeight: 0,
+                    bounceTime: 0
+                });
+                
+                // Add text to indicate heart drop
+                player.killEffects.push({
+                    type: 'text',
+                    worldX: x,
+                    worldY: y - 80,
+                    text: 'HEART DROP!',
+                    size: 18,
+                    color: '255, 0, 0', // Red for heart drop
+                    lifetime: 90,
+                    maxLifetime: 90
+                });
+            }
         }
         
         // Add particle effect
@@ -2839,11 +3119,9 @@ function drawEnemyArrow(x, y, angle, enemyType) {
 // Initialize the game when the page loads
 window.addEventListener('load', init); 
 
-// Audio context for music and sounds
+// Audio context for sound effects
 let audioContext;
-let musicEnabled = true;
-let currentMusic = null;
-let musicVolume = 0.3; // Default music volume
+let soundVolume = 0.5; // Default sound volume
 
 // Initialize audio context
 function initAudio() {
@@ -2851,437 +3129,33 @@ function initAudio() {
         // Create audio context
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         
-        // Create music system
-        initMusicSystem();
-        
         console.log("Audio system initialized");
+        return true;
     } catch (error) {
-        errorHandler.handle(error, 'audio initialization');
-        console.warn("Audio could not be initialized. Music will be disabled.");
-        musicEnabled = false;
+        console.warn("Audio could not be initialized. Sound will be disabled.");
+        return false;
     }
 }
 
-// Music system
-const musicSystem = {
-    context: null,
-    mainGainNode: null,
-    currentTrack: null,
-    isPlaying: false,
-    
-    // Music tracks
-    tracks: {
-        main: {
-            bpm: 120,
-            notes: [], // Will be generated
-            bassline: [], // Will be generated
-            drums: [] // Will be generated
-        },
-        combat: {
-            bpm: 150,
-            notes: [], // Will be generated
-            bassline: [], // Will be generated
-            drums: [] // Will be generated
-        }
-    }
+// Sound effects
+const sounds = {
+    damage: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
+    attack: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
+    enemyHit: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
+    enemyDefeat: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
+    combatStart: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
+    combatEnd: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
+    swordSwing: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
+    enemyNearby: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
+    heartCollect: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
+    heal: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v'
 };
 
-// Initialize music system
-function initMusicSystem() {
-    try {
-        if (!audioContext) return;
-        
-        musicSystem.context = audioContext;
-        
-        // Create main gain node
-        musicSystem.mainGainNode = audioContext.createGain();
-        musicSystem.mainGainNode.gain.value = musicVolume;
-        musicSystem.mainGainNode.connect(audioContext.destination);
-        
-        // Generate music patterns
-        generateMusicPatterns();
-        
-        // Start with main theme
-        playMusic('main');
-        
-        console.log("Music system initialized");
-    } catch (error) {
-        errorHandler.handle(error, 'music system initialization');
-    }
-}
-
-// Generate music patterns for all tracks
-function generateMusicPatterns() {
-    try {
-        // Generate main theme (heroic, adventurous)
-        const mainMelody = [
-            { note: 'C4', duration: 0.5 },
-            { note: 'E4', duration: 0.5 },
-            { note: 'G4', duration: 0.5 },
-            { note: 'C5', duration: 0.5 },
-            { note: 'B4', duration: 0.5 },
-            { note: 'G4', duration: 0.5 },
-            { note: 'A4', duration: 0.5 },
-            { note: 'F4', duration: 0.5 },
-            { note: 'G4', duration: 1.0 },
-            { note: 'E4', duration: 0.5 },
-            { note: 'C4', duration: 0.5 },
-            { note: 'D4', duration: 0.5 },
-            { note: 'E4', duration: 0.5 },
-            { note: 'F4', duration: 0.5 },
-            { note: 'G4', duration: 1.0 }
-        ];
-        
-        const mainBassline = [
-            { note: 'C2', duration: 1.0 },
-            { note: 'G2', duration: 1.0 },
-            { note: 'A2', duration: 1.0 },
-            { note: 'F2', duration: 1.0 },
-            { note: 'C2', duration: 1.0 },
-            { note: 'G2', duration: 1.0 },
-            { note: 'F2', duration: 1.0 },
-            { note: 'G2', duration: 1.0 }
-        ];
-        
-        const mainDrums = [
-            { type: 'kick', time: 0.0 },
-            { type: 'hihat', time: 0.5 },
-            { type: 'snare', time: 1.0 },
-            { type: 'hihat', time: 1.5 },
-            { type: 'kick', time: 2.0 },
-            { type: 'hihat', time: 2.5 },
-            { type: 'snare', time: 3.0 },
-            { type: 'hihat', time: 3.5 }
-        ];
-        
-        // Generate combat theme (intense, faster)
-        const combatMelody = [
-            { note: 'E4', duration: 0.25 },
-            { note: 'E4', duration: 0.25 },
-            { note: 'G4', duration: 0.5 },
-            { note: 'E4', duration: 0.25 },
-            { note: 'E4', duration: 0.25 },
-            { note: 'A4', duration: 0.5 },
-            { note: 'E4', duration: 0.25 },
-            { note: 'E4', duration: 0.25 },
-            { note: 'B4', duration: 0.5 },
-            { note: 'A4', duration: 0.5 },
-            { note: 'G4', duration: 0.5 },
-            { note: 'E4', duration: 0.25 },
-            { note: 'E4', duration: 0.25 },
-            { note: 'G4', duration: 0.5 },
-            { note: 'A4', duration: 0.5 },
-            { note: 'B4', duration: 0.5 },
-            { note: 'C5', duration: 0.5 }
-        ];
-        
-        const combatBassline = [
-            { note: 'E2', duration: 0.5 },
-            { note: 'E2', duration: 0.5 },
-            { note: 'A2', duration: 0.5 },
-            { note: 'A2', duration: 0.5 },
-            { note: 'B2', duration: 0.5 },
-            { note: 'B2', duration: 0.5 },
-            { note: 'A2', duration: 0.5 },
-            { note: 'G2', duration: 0.5 },
-            { note: 'E2', duration: 0.5 },
-            { note: 'E2', duration: 0.5 },
-            { note: 'G2', duration: 0.5 },
-            { note: 'A2', duration: 0.5 },
-            { note: 'B2', duration: 0.5 },
-            { note: 'B2', duration: 0.5 },
-            { note: 'C3', duration: 0.5 },
-            { note: 'C3', duration: 0.5 }
-        ];
-        
-        const combatDrums = [
-            { type: 'kick', time: 0.0 },
-            { type: 'hihat', time: 0.25 },
-            { type: 'snare', time: 0.5 },
-            { type: 'hihat', time: 0.75 },
-            { type: 'kick', time: 1.0 },
-            { type: 'hihat', time: 1.25 },
-            { type: 'snare', time: 1.5 },
-            { type: 'hihat', time: 1.75 },
-            { type: 'kick', time: 2.0 },
-            { type: 'kick', time: 2.25 },
-            { type: 'snare', time: 2.5 },
-            { type: 'hihat', time: 2.75 },
-            { type: 'kick', time: 3.0 },
-            { type: 'hihat', time: 3.25 },
-            { type: 'snare', time: 3.5 },
-            { type: 'snare', time: 3.75 }
-        ];
-        
-        // Assign patterns to tracks
-        musicSystem.tracks.main.notes = mainMelody;
-        musicSystem.tracks.main.bassline = mainBassline;
-        musicSystem.tracks.main.drums = mainDrums;
-        
-        musicSystem.tracks.combat.notes = combatMelody;
-        musicSystem.tracks.combat.bassline = combatBassline;
-        musicSystem.tracks.combat.drums = combatDrums;
-        
-    } catch (error) {
-        errorHandler.handle(error, 'music pattern generation');
-    }
-}
-
-// Play a music track
-function playMusic(trackName) {
-    try {
-        if (!musicEnabled || !audioContext) return;
-        
-        // Stop current music if playing
-        if (musicSystem.isPlaying) {
-            stopMusic();
-        }
-        
-        // Get the track
-        const track = musicSystem.tracks[trackName];
-        if (!track) {
-            console.warn(`Music track "${trackName}" not found`);
-            return;
-        }
-        
-        musicSystem.currentTrack = trackName;
-        musicSystem.isPlaying = true;
-        
-        // Play the track
-        playMusicTrack(track);
-        
-        console.log(`Playing music track: ${trackName}`);
-    } catch (error) {
-        errorHandler.handle(error, 'play music');
-    }
-}
-
-// Stop the current music
-function stopMusic() {
-    try {
-        if (!musicSystem.isPlaying) return;
-        
-        // Stop all oscillators
-        if (musicSystem.melodyOscillators) {
-            musicSystem.melodyOscillators.forEach(osc => {
-                try {
-                    osc.stop();
-                    osc.disconnect();
-                } catch (e) {
-                    // Ignore errors from already stopped oscillators
-                }
-            });
-        }
-        
-        if (musicSystem.bassOscillators) {
-            musicSystem.bassOscillators.forEach(osc => {
-                try {
-                    osc.stop();
-                    osc.disconnect();
-                } catch (e) {
-                    // Ignore errors from already stopped oscillators
-                }
-            });
-        }
-        
-        // Clear any scheduled notes
-        if (musicSystem.scheduledNotes) {
-            musicSystem.scheduledNotes.forEach(note => clearTimeout(note));
-        }
-        
-        musicSystem.isPlaying = false;
-        musicSystem.melodyOscillators = [];
-        musicSystem.bassOscillators = [];
-        musicSystem.scheduledNotes = [];
-        
-        console.log("Music stopped");
-    } catch (error) {
-        errorHandler.handle(error, 'stop music');
-    }
-}
-
-// Play a music track with melody, bassline and drums
-function playMusicTrack(track) {
-    try {
-        const context = musicSystem.context;
-        const bpm = track.bpm;
-        const beatDuration = 60 / bpm;
-        
-        // Create oscillator arrays
-        musicSystem.melodyOscillators = [];
-        musicSystem.bassOscillators = [];
-        musicSystem.scheduledNotes = [];
-        
-        // Create gain nodes for each part
-        const melodyGain = context.createGain();
-        melodyGain.gain.value = 0.2;
-        melodyGain.connect(musicSystem.mainGainNode);
-        
-        const bassGain = context.createGain();
-        bassGain.gain.value = 0.3;
-        bassGain.connect(musicSystem.mainGainNode);
-        
-        const drumsGain = context.createGain();
-        drumsGain.gain.value = 0.4;
-        drumsGain.connect(musicSystem.mainGainNode);
-        
-        // Function to play a note with 8-bit sound
-        function playNote(note, time, duration, isBaseline = false) {
-            const oscillator = context.createOscillator();
-            const gainNode = context.createGain();
-            
-            // Use square wave for 8-bit sound
-            oscillator.type = isBaseline ? 'square' : 'square';
-            
-            // Convert note name to frequency
-            const freq = noteToFrequency(note);
-            oscillator.frequency.value = freq;
-            
-            // Connect oscillator to gain node
-            oscillator.connect(gainNode);
-            gainNode.connect(isBaseline ? bassGain : melodyGain);
-            
-            // Schedule note start and end
-            const startTime = context.currentTime + time;
-            const stopTime = startTime + duration * beatDuration * 0.9; // Slightly shorter for staccato effect
-            
-            // Apply envelope for 8-bit sound
-            gainNode.gain.setValueAtTime(0, startTime);
-            gainNode.gain.linearRampToValueAtTime(0.8, startTime + 0.01);
-            gainNode.gain.setValueAtTime(0.8, stopTime - 0.05);
-            gainNode.gain.linearRampToValueAtTime(0, stopTime);
-            
-            // Start and stop the oscillator
-            oscillator.start(startTime);
-            oscillator.stop(stopTime);
-            
-            // Store oscillator for later cleanup
-            if (isBaseline) {
-                musicSystem.bassOscillators.push(oscillator);
-            } else {
-                musicSystem.melodyOscillators.push(oscillator);
-            }
-        }
-        
-        // Function to play a drum sound
-        function playDrum(type, time) {
-            const oscillator = context.createOscillator();
-            const gainNode = context.createGain();
-            
-            oscillator.connect(gainNode);
-            gainNode.connect(drumsGain);
-            
-            const startTime = context.currentTime + time;
-            
-            if (type === 'kick') {
-                // Kick drum
-                oscillator.type = 'square';
-                oscillator.frequency.setValueAtTime(120, startTime);
-                oscillator.frequency.exponentialRampToValueAtTime(50, startTime + 0.1);
-                
-                gainNode.gain.setValueAtTime(1, startTime);
-                gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + 0.2);
-                
-                oscillator.start(startTime);
-                oscillator.stop(startTime + 0.2);
-            } else if (type === 'snare') {
-                // Snare drum (noise-based)
-                oscillator.type = 'square';
-                oscillator.frequency.setValueAtTime(100, startTime);
-                
-                gainNode.gain.setValueAtTime(0.8, startTime);
-                gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + 0.1);
-                
-                oscillator.start(startTime);
-                oscillator.stop(startTime + 0.1);
-                
-                // Add noise component
-                const noiseBuffer = createNoiseBuffer(context);
-                const noiseSource = context.createBufferSource();
-                const noiseGain = context.createGain();
-                
-                noiseSource.buffer = noiseBuffer;
-                noiseSource.connect(noiseGain);
-                noiseGain.connect(drumsGain);
-                
-                noiseGain.gain.setValueAtTime(0.5, startTime);
-                noiseGain.gain.exponentialRampToValueAtTime(0.01, startTime + 0.1);
-                
-                noiseSource.start(startTime);
-                noiseSource.stop(startTime + 0.1);
-            } else if (type === 'hihat') {
-                // Hi-hat (high-frequency noise)
-                oscillator.type = 'square';
-                oscillator.frequency.setValueAtTime(800, startTime);
-                
-                gainNode.gain.setValueAtTime(0.2, startTime);
-                gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + 0.05);
-                
-                oscillator.start(startTime);
-                oscillator.stop(startTime + 0.05);
-            }
-        }
-        
-        // Schedule melody notes
-        let melodyTime = 0;
-        track.notes.forEach(note => {
-            playNote(note.note, melodyTime, note.duration);
-            melodyTime += note.duration * beatDuration;
-        });
-        
-        // Schedule bassline notes
-        let bassTime = 0;
-        track.bassline.forEach(note => {
-            playNote(note.note, bassTime, note.duration, true);
-            bassTime += note.duration * beatDuration;
-        });
-        
-        // Schedule drum hits
-        track.drums.forEach(drum => {
-            playDrum(drum.type, drum.time * beatDuration);
-        });
-        
-        // Schedule loop to continue playing
-        const loopDuration = Math.max(melodyTime, bassTime);
-        const loopTimeout = setTimeout(() => {
-            if (musicSystem.isPlaying && musicSystem.currentTrack === track.name) {
-                playMusicTrack(track);
-            }
-        }, loopDuration * 1000);
-        
-        musicSystem.scheduledNotes.push(loopTimeout);
-    } catch (error) {
-        errorHandler.handle(error, 'play music track');
-    }
-}
-
-// Create a noise buffer for drum sounds
-function createNoiseBuffer(context) {
-    const bufferSize = context.sampleRate * 0.1; // 100ms buffer
-    const buffer = context.createBuffer(1, bufferSize, context.sampleRate);
-    const output = buffer.getChannelData(0);
-    
-    for (let i = 0; i < bufferSize; i++) {
-        output[i] = Math.random() * 2 - 1;
-    }
-    
-    return buffer;
-}
-
-// Convert note name to frequency
-function noteToFrequency(note) {
-    const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-    const octave = parseInt(note.slice(-1));
-    const noteName = note.slice(0, -1);
-    
-    const noteIndex = notes.indexOf(noteName);
-    if (noteIndex === -1) return 440; // Default to A4 if note not found
-    
-    // Calculate frequency using equal temperament formula
-    // A4 = 440Hz, each semitone is 2^(1/12) times the previous
-    const semitoneFromA4 = (octave - 4) * 12 + noteIndex - 9;
-    return 440 * Math.pow(2, semitoneFromA4 / 12);
-}
+// Sound timers to prevent too frequent playing
+const soundTimers = {
+    enemyNearby: 0,
+    enemyNearbyInterval: 120 // Play every 2 seconds at most
+};
 
 // Toggle music on/off
 function toggleMusic() {

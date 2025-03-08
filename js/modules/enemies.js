@@ -1,5 +1,6 @@
 import { TILE_SIZE, OBJECTS, TERRAIN, ENEMY_PROPERTIES, ENEMY_TYPES } from './constants.js';
 import { player } from './player.js';
+import { HEART_COLLECTIBLE, addHeartDrop } from './collectibles.js';
 
 // Array to store all enemies
 export let enemies = [];
@@ -197,6 +198,11 @@ export function damageEnemy(enemyIndex, amount, isCritical, wasResisted, audioSy
         // Add hit effect
         enemy.hitEffect = 10; // Flash for 10 frames
         
+        // Play hit sound
+        if (audioSystem) {
+            audioSystem.playSound('enemyHit');
+        }
+        
         // Reduce enemy health
         enemy.health -= amount;
         
@@ -211,6 +217,11 @@ export function damageEnemy(enemyIndex, amount, isCritical, wasResisted, audioSy
             // Play defeat sound
             if (audioSystem) {
                 audioSystem.playSound('enemyDefeat');
+            }
+            
+            // Chance to drop a heart
+            if (Math.random() < HEART_COLLECTIBLE.dropChance) {
+                addHeartDrop(enemyX, enemyY);
             }
             
             // Increment combo

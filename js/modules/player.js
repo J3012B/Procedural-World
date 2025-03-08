@@ -64,10 +64,15 @@ export function updatePlayerAnimation() {
 }
 
 // Start a sword attack
-export function startAttack() {
+export function startAttack(audioSystem) {
     try {
         player.isAttacking = true;
         player.attackTime = player.attackDuration;
+        
+        // Play sword swing sound
+        if (audioSystem) {
+            audioSystem.playSound('swordSwing');
+        }
     } catch (error) {
         console.error(`Error in start attack: ${error.message}`);
     }
