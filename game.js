@@ -466,8 +466,8 @@ function checkCollision(newX, newY) {
         // Update boat status based on terrain
         if (isOverWater) {
             player.inBoat = true;
-            // Slow down slightly when in boat
-            player.speed = 2.5;
+            // Slow down significantly when in boat on water
+            player.speed = 1.5;
             return false; // Allow movement over water when in boat
         } else {
             if (player.inBoat) {
