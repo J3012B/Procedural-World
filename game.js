@@ -41,13 +41,15 @@ let objectImages = {};
 let player = {
     worldX: 0,
     worldY: 0,
-    color: '#F9A743', // Orange cat color
+    color: '#8C8C8C', // Silver/gray for knight armor
     size: PLAYER_SIZE,
-    speed: 4, // Slightly faster for a cat
+    speed: 3, // Slightly slower for a knight in armor
     animationFrame: 0,
     isMoving: false,
     lastDirection: { x: 0, y: 0 },
-    blinkRate: 0.1 // Controls how often the cat blinks
+    blinkRate: 0.1, // Controls how often the knight blinks
+    inBoat: false, // Whether the knight is currently in a boat
+    boatColor: '#8B4513' // Brown wooden boat
 };
 let gameTime = 0;
 let minimapVisible = true;
@@ -433,6 +435,7 @@ function checkCollision(newX, newY) {
     try {
         // Get the tile coordinates for the player's position
         const playerSize = player.size * 0.8; // Use slightly smaller hitbox for better gameplay
+        let isOverWater = false;
         
         // Check the four corners of the player
         const positions = [
@@ -450,7 +453,7 @@ function checkCollision(newX, newY) {
             // Check terrain
             const terrain = getTerrainAt(tileX, tileY);
             if (terrain === TERRAIN.WATER) {
-                return true; // Collision with water
+                isOverWater = true;
             }
             
             // Check objects
@@ -460,7 +463,20 @@ function checkCollision(newX, newY) {
             }
         }
         
-        return false; // No collision
+        // Update boat status based on terrain
+        if (isOverWater) {
+            player.inBoat = true;
+            // Slow down slightly when in boat
+            player.speed = 2.5;
+            return false; // Allow movement over water when in boat
+        } else {
+            if (player.inBoat) {
+                // Return to normal speed when leaving boat
+                player.speed = 3;
+            }
+            player.inBoat = false;
+            return false; // No collision
+        }
     } catch (error) {
         errorHandler.handle(error, 'collision detection');
         return false;
@@ -619,7 +635,7 @@ function render() {
     }
 }
 
-// Draw the player character (cat)
+// Draw the player character (knight)
 function drawPlayer() {
     try {
         // Calculate player's screen position (center of screen)
@@ -636,71 +652,188 @@ function drawPlayer() {
         // Add a slight bounce effect when moving
         const bounceOffset = player.isMoving ? Math.sin(player.animationFrame * 0.3) * 2 : 0;
         
-        // Draw cat body (circle)
+        // Draw boat if player is over water
+        if (player.inBoat) {
+            // Draw boat shadow
+            ctx.beginPath();
+            ctx.ellipse(
+                centerX, 
+                centerY + player.size/2 + 4, 
+                player.size * 0.8, 
+                player.size/3, 
+                0, 0, Math.PI * 2
+            );
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fill();
+            
+            // Draw boat base (hull)
+            ctx.beginPath();
+            ctx.ellipse(
+                centerX, 
+                centerY + player.size/4 - bounceOffset, 
+                player.size * 0.7, 
+                player.size/3, 
+                0, 0, Math.PI
+            );
+            ctx.fillStyle = player.boatColor;
+            ctx.fill();
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = '#5A3A1A';
+            ctx.stroke();
+            
+            // Draw boat interior
+            ctx.beginPath();
+            ctx.ellipse(
+                centerX, 
+                centerY + player.size/4 - bounceOffset, 
+                player.size * 0.6, 
+                player.size/4, 
+                0, 0, Math.PI
+            );
+            ctx.fillStyle = '#A67D5A'; // Lighter wood color for interior
+            ctx.fill();
+            
+            // Draw boat sides
+            ctx.beginPath();
+            ctx.moveTo(centerX - player.size * 0.7, centerY + player.size/4 - bounceOffset);
+            ctx.lineTo(centerX - player.size * 0.5, centerY - player.size/4 - bounceOffset);
+            ctx.lineTo(centerX + player.size * 0.5, centerY - player.size/4 - bounceOffset);
+            ctx.lineTo(centerX + player.size * 0.7, centerY + player.size/4 - bounceOffset);
+            ctx.closePath();
+            ctx.fillStyle = player.boatColor;
+            ctx.fill();
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = '#5A3A1A';
+            ctx.stroke();
+            
+            // Draw water ripples around boat
+            const rippleTime = gameTime * 0.003;
+            for (let i = 0; i < 3; i++) {
+                const rippleSize = player.size * (0.8 + 0.2 * Math.sin(rippleTime + i));
+                const rippleOffset = 5 + i * 8;
+                
+                ctx.beginPath();
+                ctx.arc(
+                    centerX, 
+                    centerY + player.size/4 - bounceOffset + rippleOffset, 
+                    rippleSize, 
+                    0.1 * Math.PI, 0.9 * Math.PI
+                );
+                ctx.strokeStyle = `rgba(255, 255, 255, ${0.4 - i * 0.1})`;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+        }
+        
+        // Draw knight body (circle)
         ctx.beginPath();
         ctx.arc(centerX, centerY - bounceOffset, player.size/2, 0, Math.PI * 2);
         ctx.fillStyle = player.color;
         ctx.fill();
         ctx.lineWidth = 2;
-        ctx.strokeStyle = '#E87110'; // Darker orange outline
+        ctx.strokeStyle = '#5A5A5A'; // Darker gray outline
         ctx.stroke();
         
-        // Draw cat ears
-        const earSize = player.size / 4;
-        const earDistance = player.size / 3;
+        // Draw knight helmet
+        const helmetHeight = player.size / 2.5;
         
-        // Left ear
+        // Helmet base
         ctx.beginPath();
-        ctx.moveTo(centerX - earDistance, centerY - bounceOffset - earSize/2);
-        ctx.lineTo(centerX - earDistance + earSize, centerY - bounceOffset - earSize*1.5);
-        ctx.lineTo(centerX - earDistance + earSize*2, centerY - bounceOffset - earSize/2);
-        ctx.closePath();
+        ctx.rect(
+            centerX - player.size/3, 
+            centerY - bounceOffset - player.size/2 - helmetHeight/2, 
+            player.size/1.5, 
+            helmetHeight
+        );
         ctx.fillStyle = player.color;
         ctx.fill();
-        ctx.strokeStyle = '#E87110';
+        ctx.strokeStyle = '#5A5A5A';
         ctx.stroke();
         
-        // Right ear
+        // Helmet visor
         ctx.beginPath();
-        ctx.moveTo(centerX + earDistance, centerY - bounceOffset - earSize/2);
-        ctx.lineTo(centerX + earDistance - earSize, centerY - bounceOffset - earSize*1.5);
-        ctx.lineTo(centerX + earDistance - earSize*2, centerY - bounceOffset - earSize/2);
-        ctx.closePath();
-        ctx.fillStyle = player.color;
-        ctx.fill();
-        ctx.strokeStyle = '#E87110';
-        ctx.stroke();
-        
-        // Inner ear details
-        ctx.beginPath();
-        ctx.moveTo(centerX - earDistance + earSize/2, centerY - bounceOffset - earSize/2);
-        ctx.lineTo(centerX - earDistance + earSize, centerY - bounceOffset - earSize);
-        ctx.lineTo(centerX - earDistance + earSize*1.5, centerY - bounceOffset - earSize/2);
-        ctx.closePath();
-        ctx.fillStyle = '#FFC8A2'; // Light pink
+        ctx.rect(
+            centerX - player.size/4, 
+            centerY - bounceOffset - player.size/2 - helmetHeight/4, 
+            player.size/2, 
+            helmetHeight/3
+        );
+        ctx.fillStyle = '#333333'; // Dark visor
         ctx.fill();
         
+        // Helmet plume/crest
         ctx.beginPath();
-        ctx.moveTo(centerX + earDistance - earSize/2, centerY - bounceOffset - earSize/2);
-        ctx.lineTo(centerX + earDistance - earSize, centerY - bounceOffset - earSize);
-        ctx.lineTo(centerX + earDistance - earSize*1.5, centerY - bounceOffset - earSize/2);
+        ctx.moveTo(centerX - player.size/6, centerY - bounceOffset - player.size/2 - helmetHeight);
+        ctx.lineTo(centerX, centerY - bounceOffset - player.size/2 - helmetHeight - player.size/4);
+        ctx.lineTo(centerX + player.size/6, centerY - bounceOffset - player.size/2 - helmetHeight);
         ctx.closePath();
-        ctx.fillStyle = '#FFC8A2'; // Light pink
+        ctx.fillStyle = '#CC0000'; // Red plume
         ctx.fill();
         
-        // Eyes
-        const eyeSize = player.size / 8;
-        const eyeOffsetX = player.size / 6;
+        // Shield (if facing left)
+        if (player.lastDirection.x < 0) {
+            ctx.beginPath();
+            ctx.ellipse(
+                centerX - player.size/2 - player.size/6, 
+                centerY - bounceOffset, 
+                player.size/4, player.size/3, 0, 0, Math.PI * 2
+            );
+            ctx.fillStyle = '#CC0000'; // Red shield
+            ctx.fill();
+            ctx.strokeStyle = '#FFCC00'; // Gold trim
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            // Shield emblem
+            ctx.beginPath();
+            ctx.moveTo(centerX - player.size/2 - player.size/6, centerY - bounceOffset - player.size/6);
+            ctx.lineTo(centerX - player.size/2 - player.size/6 - player.size/10, centerY - bounceOffset);
+            ctx.lineTo(centerX - player.size/2 - player.size/6, centerY - bounceOffset + player.size/6);
+            ctx.lineTo(centerX - player.size/2 - player.size/6 + player.size/10, centerY - bounceOffset);
+            ctx.closePath();
+            ctx.fillStyle = '#FFCC00'; // Gold emblem
+            ctx.fill();
+        }
+        
+        // Sword (if facing right)
+        if (player.lastDirection.x >= 0) {
+            // Sword handle
+            ctx.beginPath();
+            ctx.rect(
+                centerX + player.size/2, 
+                centerY - bounceOffset - player.size/8, 
+                player.size/4, 
+                player.size/4
+            );
+            ctx.fillStyle = '#8B4513'; // Brown handle
+            ctx.fill();
+            
+            // Sword blade
+            ctx.beginPath();
+            ctx.moveTo(centerX + player.size/2 + player.size/4, centerY - bounceOffset);
+            ctx.lineTo(centerX + player.size/2 + player.size/4 + player.size/2, centerY - bounceOffset - player.size/6);
+            ctx.lineTo(centerX + player.size/2 + player.size/4 + player.size/2, centerY - bounceOffset + player.size/6);
+            ctx.closePath();
+            ctx.fillStyle = '#CCCCCC'; // Silver blade
+            ctx.fill();
+            ctx.strokeStyle = '#999999';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        }
+        
+        // Eyes (visible through visor)
+        const eyeSize = player.size / 10;
+        const eyeOffsetX = player.size / 8;
+        const eyeOffsetY = -player.size/3;
         
         // Eye position changes based on last movement direction
-        const eyeOffsetY = -player.size / 8 + (player.lastDirection.y * player.size / 16);
         const eyeOffsetXDirection = player.lastDirection.x * player.size / 16;
         
-        // Check if cat is blinking
+        // Check if knight is blinking
         if (player.isBlinking) {
             // Closed eyes (lines)
             ctx.lineWidth = 2;
-            ctx.strokeStyle = '#000000';
+            ctx.strokeStyle = '#FFFFFF';
             
             // Left eye
             ctx.beginPath();
@@ -718,15 +851,15 @@ function drawPlayer() {
                       centerY - bounceOffset + eyeOffsetY + eyeSize/2);
             ctx.stroke();
         } else {
-            // Open eyes (ellipses)
-            ctx.fillStyle = '#00AA00'; // Green cat eyes
+            // Open eyes (glowing in the darkness of the helmet)
+            ctx.fillStyle = '#FFFFFF'; // Glowing white eyes
             
             // Left eye
             ctx.beginPath();
             ctx.ellipse(
                 centerX - eyeOffsetX + eyeOffsetXDirection, 
                 centerY - bounceOffset + eyeOffsetY, 
-                eyeSize, eyeSize*1.5, 0, 0, Math.PI * 2
+                eyeSize, eyeSize, 0, 0, Math.PI * 2
             );
             ctx.fill();
             
@@ -735,90 +868,12 @@ function drawPlayer() {
             ctx.ellipse(
                 centerX + eyeOffsetX + eyeOffsetXDirection, 
                 centerY - bounceOffset + eyeOffsetY, 
-                eyeSize, eyeSize*1.5, 0, 0, Math.PI * 2
-            );
-            ctx.fill();
-            
-            // Pupils
-            ctx.fillStyle = '#000000';
-            
-            // Left pupil
-            ctx.beginPath();
-            ctx.ellipse(
-                centerX - eyeOffsetX + eyeOffsetXDirection + eyeOffsetXDirection/2, 
-                centerY - bounceOffset + eyeOffsetY, 
-                eyeSize/2, eyeSize, 0, 0, Math.PI * 2
-            );
-            ctx.fill();
-            
-            // Right pupil
-            ctx.beginPath();
-            ctx.ellipse(
-                centerX + eyeOffsetX + eyeOffsetXDirection + eyeOffsetXDirection/2, 
-                centerY - bounceOffset + eyeOffsetY, 
-                eyeSize/2, eyeSize, 0, 0, Math.PI * 2
+                eyeSize, eyeSize, 0, 0, Math.PI * 2
             );
             ctx.fill();
         }
-        
-        // Nose
-        ctx.beginPath();
-        ctx.moveTo(centerX, centerY - bounceOffset + eyeSize);
-        ctx.lineTo(centerX - eyeSize/2, centerY - bounceOffset + eyeSize*2);
-        ctx.lineTo(centerX + eyeSize/2, centerY - bounceOffset + eyeSize*2);
-        ctx.closePath();
-        ctx.fillStyle = '#FF9D9D'; // Pink nose
-        ctx.fill();
-        
-        // Whiskers
-        ctx.lineWidth = 1;
-        ctx.strokeStyle = '#FFFFFF';
-        
-        // Left whiskers
-        ctx.beginPath();
-        ctx.moveTo(centerX - eyeSize, centerY - bounceOffset + eyeSize*2);
-        ctx.lineTo(centerX - player.size/2 - eyeSize, centerY - bounceOffset + eyeSize);
-        ctx.stroke();
-        
-        ctx.beginPath();
-        ctx.moveTo(centerX - eyeSize, centerY - bounceOffset + eyeSize*2);
-        ctx.lineTo(centerX - player.size/2 - eyeSize, centerY - bounceOffset + eyeSize*2);
-        ctx.stroke();
-        
-        ctx.beginPath();
-        ctx.moveTo(centerX - eyeSize, centerY - bounceOffset + eyeSize*2);
-        ctx.lineTo(centerX - player.size/2 - eyeSize, centerY - bounceOffset + eyeSize*3);
-        ctx.stroke();
-        
-        // Right whiskers
-        ctx.beginPath();
-        ctx.moveTo(centerX + eyeSize, centerY - bounceOffset + eyeSize*2);
-        ctx.lineTo(centerX + player.size/2 + eyeSize, centerY - bounceOffset + eyeSize);
-        ctx.stroke();
-        
-        ctx.beginPath();
-        ctx.moveTo(centerX + eyeSize, centerY - bounceOffset + eyeSize*2);
-        ctx.lineTo(centerX + player.size/2 + eyeSize, centerY - bounceOffset + eyeSize*2);
-        ctx.stroke();
-        
-        ctx.beginPath();
-        ctx.moveTo(centerX + eyeSize, centerY - bounceOffset + eyeSize*2);
-        ctx.lineTo(centerX + player.size/2 + eyeSize, centerY - bounceOffset + eyeSize*3);
-        ctx.stroke();
-        
-        // Draw a shadow beneath the player
-        ctx.beginPath();
-        ctx.ellipse(
-            centerX, 
-            centerY + player.size/2 - bounceOffset + 4, 
-            player.size/2 * 0.8, 
-            player.size/4 * 0.8, 
-            0, 0, Math.PI * 2
-        );
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-        ctx.fill();
     } catch (error) {
-        errorHandler.handle(error, 'player rendering');
+        errorHandler.handle(error, 'drawPlayer');
     }
 }
 
