@@ -49,8 +49,56 @@ let player = {
     lastDirection: { x: 0, y: 0 },
     blinkRate: 0.1, // Controls how often the knight blinks
     inBoat: false, // Whether the knight is currently in a boat
-    boatColor: '#8B4513' // Brown wooden boat
+    boatColor: '#8B4513', // Brown wooden boat
+    health: 3, // Player starts with 3 hearts
+    maxHealth: 3, // Maximum health
+    invulnerable: false, // Invulnerability after taking damage
+    invulnerabilityTime: 0, // Time remaining for invulnerability
+    invulnerabilityDuration: 60, // Frames of invulnerability (1 second at 60fps)
+    damageFlashTime: 0 // Time remaining for damage flash effect
 };
+
+// Enemy types
+const ENEMY_TYPES = {
+    GOBLIN: 0,
+    SKELETON: 1,
+    SLIME: 2
+};
+
+// Enemy properties
+const ENEMY_PROPERTIES = {
+    [ENEMY_TYPES.GOBLIN]: {
+        color: '#4CAF50', // Green
+        size: PLAYER_SIZE * 0.8,
+        speed: 1.2,
+        followPlayer: true,
+        detectionRadius: TILE_SIZE * 5
+    },
+    [ENEMY_TYPES.SKELETON]: {
+        color: '#E0E0E0', // Light gray
+        size: PLAYER_SIZE * 0.9,
+        speed: 0.8,
+        followPlayer: true,
+        detectionRadius: TILE_SIZE * 7
+    },
+    [ENEMY_TYPES.SLIME]: {
+        color: '#9C27B0', // Purple
+        size: PLAYER_SIZE * 0.7,
+        speed: 0.5,
+        followPlayer: false,
+        detectionRadius: 0
+    }
+};
+
+// Array to store all enemies
+let enemies = [];
+
+// Maximum number of enemies to spawn
+const MAX_ENEMIES = 30;
+
+// Minimum distance between enemies and player when spawning
+const MIN_SPAWN_DISTANCE = TILE_SIZE * 10;
+
 let gameTime = 0;
 let minimapVisible = true;
 
@@ -106,16 +154,14 @@ function init() {
         // Generate object images
         generateObjectImages();
         
-        // Initialize player position to a nice starting area
+        // Initialize player position
         initializePlayerPosition();
         
-        // Log initial state
-        console.log("Game initialized");
-        console.log("Player position:", player.worldX, player.worldY);
-        console.log("Canvas size:", canvas.width, canvas.height);
+        // Spawn initial enemies
+        spawnEnemies();
         
-        // Start game loop
-        requestAnimationFrame(gameLoop);
+        // Start the game loop
+        gameLoop();
     } catch (error) {
         errorHandler.handle(error, 'initialization');
     }
@@ -623,8 +669,14 @@ function render() {
             }
         }
         
+        // Draw enemies
+        drawEnemies();
+        
         // Draw player
         drawPlayer();
+        
+        // Draw health UI
+        drawHealthUI();
         
         // Draw minimap
         if (minimapVisible) {
@@ -638,6 +690,11 @@ function render() {
 // Draw the player character (knight)
 function drawPlayer() {
     try {
+        // Skip drawing player every few frames when flashing from damage
+        if (player.damageFlashTime > 0 && player.damageFlashTime % 2 === 0) {
+            return;
+        }
+        
         // Calculate player's screen position (center of screen)
         const screenX = Math.round(player.worldX - cameraX);
         const screenY = Math.round(player.worldY - cameraY);
@@ -725,10 +782,19 @@ function drawPlayer() {
             }
         }
         
+        // Determine player color based on invulnerability
+        let playerColor = player.color;
+        if (player.invulnerable && player.damageFlashTime <= 0) {
+            // Flashing effect during invulnerability
+            if (Math.floor(player.invulnerabilityTime / 5) % 2 === 0) {
+                playerColor = '#FFFFFF'; // Flash white
+            }
+        }
+        
         // Draw knight body (circle)
         ctx.beginPath();
         ctx.arc(centerX, centerY - bounceOffset, player.size/2, 0, Math.PI * 2);
-        ctx.fillStyle = player.color;
+        ctx.fillStyle = playerColor;
         ctx.fill();
         ctx.lineWidth = 2;
         ctx.strokeStyle = '#5A5A5A'; // Darker gray outline
@@ -900,6 +966,76 @@ function updatePlayerAnimation() {
     }
 }
 
+// Draw the player's health UI
+function drawHealthUI() {
+    try {
+        const heartSize = 30;
+        const heartSpacing = 10;
+        const startX = 20;
+        const startY = 20;
+        
+        for (let i = 0; i < player.maxHealth; i++) {
+            const heartX = startX + i * (heartSize + heartSpacing);
+            
+            // Draw heart outline
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = '#FFFFFF';
+            
+            // Draw heart shape
+            drawHeart(heartX, startY, heartSize, i < player.health ? '#FF0000' : 'rgba(255, 0, 0, 0.3)');
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'health UI');
+    }
+}
+
+// Draw a heart shape
+function drawHeart(x, y, size, fillColor) {
+    try {
+        const halfSize = size / 2;
+        
+        ctx.beginPath();
+        ctx.moveTo(x + halfSize, y + size * 0.25);
+        
+        // Left curve
+        ctx.bezierCurveTo(
+            x + halfSize, y, 
+            x, y, 
+            x, y + halfSize
+        );
+        
+        // Left bottom
+        ctx.bezierCurveTo(
+            x, y + size * 0.75, 
+            x + halfSize * 0.5, y + size * 0.9, 
+            x + halfSize, y + size
+        );
+        
+        // Right bottom
+        ctx.bezierCurveTo(
+            x + halfSize * 1.5, y + size * 0.9, 
+            x + size, y + size * 0.75, 
+            x + size, y + halfSize
+        );
+        
+        // Right curve
+        ctx.bezierCurveTo(
+            x + size, y, 
+            x + halfSize, y, 
+            x + halfSize, y + size * 0.25
+        );
+        
+        // Fill and stroke
+        ctx.fillStyle = fillColor;
+        ctx.fill();
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    } catch (error) {
+        errorHandler.handle(error, 'heart drawing');
+    }
+}
+
 // Draw the minimap
 function drawMinimap() {
     try {
@@ -950,24 +1086,68 @@ function drawMinimap() {
                         ctx.fillStyle = '#006400'; // Dark green for trees
                         ctx.fillRect(mapX - minimapTileSize/2, mapY - minimapTileSize/2, minimapTileSize, minimapTileSize);
                     } else if (object === OBJECTS.ROCK) {
-                        ctx.fillStyle = '#696969'; // Dark gray for rocks
+                        ctx.fillStyle = '#A9A9A9'; // Dark gray for rocks
                         ctx.fillRect(mapX - minimapTileSize/2, mapY - minimapTileSize/2, minimapTileSize, minimapTileSize);
                     }
                 }
             }
         }
         
+        // Draw enemies on minimap
+        for (let i = 0; i < enemies.length; i++) {
+            const enemy = enemies[i];
+            const enemyTileX = Math.floor(enemy.worldX / TILE_SIZE);
+            const enemyTileY = Math.floor(enemy.worldY / TILE_SIZE);
+            const mapX = minimapX + minimapRadius + (enemyTileX - centerTileX) * minimapTileSize;
+            const mapY = minimapY + minimapRadius + (enemyTileY - centerTileY) * minimapTileSize;
+            
+            // Calculate distance from center for circular mask
+            const distFromCenter = Math.sqrt(
+                Math.pow(mapX - (minimapX + minimapRadius), 2) + 
+                Math.pow(mapY - (minimapY + minimapRadius), 2)
+            );
+            
+            // Only draw if within the circular minimap
+            if (distFromCenter <= minimapRadius) {
+                // Draw enemy based on type
+                switch (enemy.type) {
+                    case ENEMY_TYPES.GOBLIN:
+                        ctx.fillStyle = '#FF0000'; // Red for goblins
+                        break;
+                    case ENEMY_TYPES.SKELETON:
+                        ctx.fillStyle = '#FFFFFF'; // White for skeletons
+                        break;
+                    case ENEMY_TYPES.SLIME:
+                        ctx.fillStyle = '#9C27B0'; // Purple for slimes
+                        break;
+                }
+                
+                ctx.beginPath();
+                ctx.arc(mapX, mapY, minimapTileSize/2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        
         // Draw player on minimap
-        ctx.fillStyle = player.color;
+        const playerMapX = minimapX + minimapRadius;
+        const playerMapY = minimapY + minimapRadius;
+        
+        ctx.fillStyle = '#FFFF00'; // Yellow for player
         ctx.beginPath();
-        ctx.arc(minimapX + minimapRadius, minimapY + minimapRadius, minimapTileSize, 0, Math.PI * 2);
+        ctx.arc(playerMapX, playerMapY, minimapTileSize, 0, Math.PI * 2);
         ctx.fill();
         
-        // Draw minimap label
-        ctx.fillStyle = 'white';
-        ctx.font = '12px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText('Press M to toggle minimap', minimapX + minimapRadius, minimapY + minimapSize + 15);
+        // Draw player direction indicator
+        const dirLength = minimapTileSize * 2;
+        const dirX = playerMapX + player.lastDirection.x * dirLength;
+        const dirY = playerMapY + player.lastDirection.y * dirLength;
+        
+        ctx.strokeStyle = '#FFFF00';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(playerMapX, playerMapY);
+        ctx.lineTo(dirX, dirY);
+        ctx.stroke();
     } catch (error) {
         errorHandler.handle(error, 'minimap rendering');
     }
@@ -986,8 +1166,24 @@ function gameLoop() {
             console.log(`Keys currently pressed: ${Object.keys(keysPressed).filter(key => keysPressed[key]).join(", ")}`);
         }
         
+        // Update invulnerability
+        if (player.invulnerable) {
+            player.invulnerabilityTime--;
+            if (player.invulnerabilityTime <= 0) {
+                player.invulnerable = false;
+            }
+            
+            // Update damage flash
+            if (player.damageFlashTime > 0) {
+                player.damageFlashTime--;
+            }
+        }
+        
         // Process input and update game state
         handleInput();
+        
+        // Update enemies
+        updateEnemies();
         
         // Render the game
         render();
@@ -998,6 +1194,464 @@ function gameLoop() {
         errorHandler.handle(error, 'game loop');
         // Even if there's an error, try to continue the game loop
         requestAnimationFrame(gameLoop);
+    }
+}
+
+// Spawn enemies randomly around the world
+function spawnEnemies() {
+    try {
+        console.log("Spawning enemies...");
+        
+        // Clear existing enemies
+        enemies = [];
+        
+        // Spawn up to MAX_ENEMIES
+        for (let i = 0; i < MAX_ENEMIES; i++) {
+            // Generate a random position that's not too close to the player
+            let enemyX, enemyY;
+            let validPosition = false;
+            let attempts = 0;
+            
+            while (!validPosition && attempts < 50) {
+                // Random position within a reasonable range of the player
+                const range = TILE_SIZE * 50; // 50 tiles range
+                enemyX = player.worldX + (Math.random() * range * 2 - range);
+                enemyY = player.worldY + (Math.random() * range * 2 - range);
+                
+                // Check if position is valid (not in water, not in objects, not too close to player)
+                const tileX = Math.floor(enemyX / TILE_SIZE);
+                const tileY = Math.floor(enemyY / TILE_SIZE);
+                const terrain = getTerrainAt(tileX, tileY);
+                const object = getObjectAt(tileX, tileY);
+                const distanceToPlayer = Math.sqrt(
+                    Math.pow(enemyX - player.worldX, 2) + 
+                    Math.pow(enemyY - player.worldY, 2)
+                );
+                
+                validPosition = (
+                    terrain !== TERRAIN.WATER && 
+                    object === OBJECTS.NONE && 
+                    distanceToPlayer > MIN_SPAWN_DISTANCE
+                );
+                
+                attempts++;
+            }
+            
+            if (validPosition) {
+                // Choose a random enemy type
+                const enemyType = Math.floor(Math.random() * Object.keys(ENEMY_TYPES).length);
+                
+                // Create the enemy
+                const enemy = {
+                    type: enemyType,
+                    worldX: enemyX,
+                    worldY: enemyY,
+                    ...ENEMY_PROPERTIES[enemyType], // Spread in the properties for this enemy type
+                    animationFrame: Math.random() * 100, // Random starting animation frame
+                    isMoving: false,
+                    moveDirection: { x: 0, y: 0 },
+                    lastMoveChange: 0
+                };
+                
+                enemies.push(enemy);
+            }
+        }
+        
+        console.log(`Spawned ${enemies.length} enemies`);
+    } catch (error) {
+        errorHandler.handle(error, 'enemy spawning');
+    }
+}
+
+// Update all enemies
+function updateEnemies() {
+    try {
+        for (let i = 0; i < enemies.length; i++) {
+            const enemy = enemies[i];
+            
+            // Update animation
+            enemy.animationFrame += 0.2;
+            if (enemy.animationFrame > 1000) {
+                enemy.animationFrame = 0;
+            }
+            
+            // Check for collision with player
+            if (!player.invulnerable) {
+                const distanceToPlayer = Math.sqrt(
+                    Math.pow(enemy.worldX - player.worldX, 2) + 
+                    Math.pow(enemy.worldY - player.worldY, 2)
+                );
+                
+                // If enemy is touching player, damage player
+                if (distanceToPlayer < (player.size/2 + enemy.size/2) * 0.8) {
+                    damagePlayer(1);
+                }
+            }
+            
+            // Determine if enemy should follow player
+            let shouldFollow = false;
+            if (enemy.followPlayer) {
+                const distanceToPlayer = Math.sqrt(
+                    Math.pow(enemy.worldX - player.worldX, 2) + 
+                    Math.pow(enemy.worldY - player.worldY, 2)
+                );
+                
+                shouldFollow = distanceToPlayer <= enemy.detectionRadius;
+            }
+            
+            // Update movement
+            if (shouldFollow) {
+                // Follow player
+                const dx = player.worldX - enemy.worldX;
+                const dy = player.worldY - enemy.worldY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance > 0) {
+                    enemy.moveDirection = {
+                        x: dx / distance,
+                        y: dy / distance
+                    };
+                    enemy.isMoving = true;
+                }
+            } else {
+                // Random movement for non-following enemies or when player is out of range
+                if (gameTime - enemy.lastMoveChange > 120) { // Change direction every ~2 seconds
+                    // 20% chance to stop, 80% chance to move in a random direction
+                    if (Math.random() < 0.2) {
+                        enemy.isMoving = false;
+                    } else {
+                        const angle = Math.random() * Math.PI * 2;
+                        enemy.moveDirection = {
+                            x: Math.cos(angle),
+                            y: Math.sin(angle)
+                        };
+                        enemy.isMoving = true;
+                    }
+                    enemy.lastMoveChange = gameTime;
+                }
+            }
+            
+            // Apply movement
+            if (enemy.isMoving) {
+                const newX = enemy.worldX + enemy.moveDirection.x * enemy.speed;
+                const newY = enemy.worldY + enemy.moveDirection.y * enemy.speed;
+                
+                // Check for collisions
+                const tileX = Math.floor(newX / TILE_SIZE);
+                const tileY = Math.floor(newY / TILE_SIZE);
+                const terrain = getTerrainAt(tileX, tileY);
+                const object = getObjectAt(tileX, tileY);
+                
+                // Only move if not colliding with water or objects
+                if (terrain !== TERRAIN.WATER && object === OBJECTS.NONE) {
+                    enemy.worldX = newX;
+                    enemy.worldY = newY;
+                } else {
+                    // If collision, change direction immediately
+                    enemy.lastMoveChange = gameTime - 100; // Force direction change soon
+                }
+            }
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'enemy updating');
+    }
+}
+
+// Draw all enemies
+function drawEnemies() {
+    try {
+        for (let i = 0; i < enemies.length; i++) {
+            const enemy = enemies[i];
+            
+            // Calculate enemy's screen position
+            const screenX = Math.round(enemy.worldX - cameraX);
+            const screenY = Math.round(enemy.worldY - cameraY);
+            
+            // Only draw if on screen
+            if (
+                screenX + enemy.size < 0 || 
+                screenX > canvas.width || 
+                screenY + enemy.size < 0 || 
+                screenY > canvas.height
+            ) {
+                continue;
+            }
+            
+            // Calculate center position
+            const centerX = screenX + enemy.size/2;
+            const centerY = screenY + enemy.size/2;
+            
+            // Add a slight bounce effect when moving
+            const bounceOffset = enemy.isMoving ? Math.sin(enemy.animationFrame * 0.3) * 2 : 0;
+            
+            // Draw enemy based on type
+            switch (enemy.type) {
+                case ENEMY_TYPES.GOBLIN:
+                    drawGoblin(enemy, centerX, centerY, bounceOffset);
+                    break;
+                case ENEMY_TYPES.SKELETON:
+                    drawSkeleton(enemy, centerX, centerY, bounceOffset);
+                    break;
+                case ENEMY_TYPES.SLIME:
+                    drawSlime(enemy, centerX, centerY, bounceOffset);
+                    break;
+            }
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'enemy rendering');
+    }
+}
+
+// Draw a goblin enemy
+function drawGoblin(enemy, centerX, centerY, bounceOffset) {
+    // Body
+    ctx.beginPath();
+    ctx.arc(centerX, centerY - bounceOffset, enemy.size/2, 0, Math.PI * 2);
+    ctx.fillStyle = enemy.color;
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#2E7D32'; // Darker green
+    ctx.stroke();
+    
+    // Ears
+    const earSize = enemy.size / 5;
+    
+    // Left ear
+    ctx.beginPath();
+    ctx.moveTo(centerX - enemy.size/3, centerY - bounceOffset - enemy.size/4);
+    ctx.lineTo(centerX - enemy.size/3 - earSize, centerY - bounceOffset - enemy.size/2);
+    ctx.lineTo(centerX - enemy.size/3 + earSize, centerY - bounceOffset - enemy.size/2);
+    ctx.closePath();
+    ctx.fillStyle = enemy.color;
+    ctx.fill();
+    ctx.strokeStyle = '#2E7D32';
+    ctx.stroke();
+    
+    // Right ear
+    ctx.beginPath();
+    ctx.moveTo(centerX + enemy.size/3, centerY - bounceOffset - enemy.size/4);
+    ctx.lineTo(centerX + enemy.size/3 - earSize, centerY - bounceOffset - enemy.size/2);
+    ctx.lineTo(centerX + enemy.size/3 + earSize, centerY - bounceOffset - enemy.size/2);
+    ctx.closePath();
+    ctx.fillStyle = enemy.color;
+    ctx.fill();
+    ctx.strokeStyle = '#2E7D32';
+    ctx.stroke();
+    
+    // Eyes
+    const eyeSize = enemy.size / 10;
+    
+    // Left eye
+    ctx.beginPath();
+    ctx.arc(centerX - enemy.size/4, centerY - bounceOffset - enemy.size/6, eyeSize, 0, Math.PI * 2);
+    ctx.fillStyle = '#FF0000'; // Red eyes
+    ctx.fill();
+    
+    // Right eye
+    ctx.beginPath();
+    ctx.arc(centerX + enemy.size/4, centerY - bounceOffset - enemy.size/6, eyeSize, 0, Math.PI * 2);
+    ctx.fillStyle = '#FF0000';
+    ctx.fill();
+    
+    // Mouth (evil grin)
+    ctx.beginPath();
+    ctx.arc(centerX, centerY - bounceOffset + enemy.size/6, enemy.size/4, 0.1 * Math.PI, 0.9 * Math.PI);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#2E7D32';
+    ctx.stroke();
+}
+
+// Draw a skeleton enemy
+function drawSkeleton(enemy, centerX, centerY, bounceOffset) {
+    // Body
+    ctx.beginPath();
+    ctx.arc(centerX, centerY - bounceOffset, enemy.size/2, 0, Math.PI * 2);
+    ctx.fillStyle = enemy.color;
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#9E9E9E'; // Gray
+    ctx.stroke();
+    
+    // Skull details
+    ctx.beginPath();
+    ctx.arc(centerX, centerY - bounceOffset, enemy.size/2.5, 0, Math.PI * 2);
+    ctx.strokeStyle = '#9E9E9E';
+    ctx.stroke();
+    
+    // Eyes (dark sockets)
+    const eyeSize = enemy.size / 8;
+    
+    // Left eye
+    ctx.beginPath();
+    ctx.arc(centerX - enemy.size/4, centerY - bounceOffset - enemy.size/8, eyeSize, 0, Math.PI * 2);
+    ctx.fillStyle = '#000000'; // Black eye sockets
+    ctx.fill();
+    
+    // Right eye
+    ctx.beginPath();
+    ctx.arc(centerX + enemy.size/4, centerY - bounceOffset - enemy.size/8, eyeSize, 0, Math.PI * 2);
+    ctx.fillStyle = '#000000';
+    ctx.fill();
+    
+    // Nose (triangle)
+    ctx.beginPath();
+    ctx.moveTo(centerX, centerY - bounceOffset);
+    ctx.lineTo(centerX - enemy.size/10, centerY - bounceOffset + enemy.size/10);
+    ctx.lineTo(centerX + enemy.size/10, centerY - bounceOffset + enemy.size/10);
+    ctx.closePath();
+    ctx.fillStyle = '#000000';
+    ctx.fill();
+    
+    // Mouth (teeth)
+    ctx.beginPath();
+    ctx.rect(centerX - enemy.size/4, centerY - bounceOffset + enemy.size/6, enemy.size/2, enemy.size/10);
+    ctx.fillStyle = '#000000';
+    ctx.fill();
+    
+    // Teeth lines
+    for (let i = 1; i < 4; i++) {
+        ctx.beginPath();
+        ctx.moveTo(centerX - enemy.size/4 + (enemy.size/2) * (i/4), centerY - bounceOffset + enemy.size/6);
+        ctx.lineTo(centerX - enemy.size/4 + (enemy.size/2) * (i/4), centerY - bounceOffset + enemy.size/6 + enemy.size/10);
+        ctx.strokeStyle = enemy.color;
+        ctx.stroke();
+    }
+}
+
+// Draw a slime enemy
+function drawSlime(enemy, centerX, centerY, bounceOffset) {
+    // Slime body (wobbling blob)
+    const wobble = Math.sin(enemy.animationFrame * 0.2) * enemy.size/10;
+    
+    // Main body
+    ctx.beginPath();
+    ctx.ellipse(
+        centerX, 
+        centerY - bounceOffset, 
+        enemy.size/2 + wobble, 
+        enemy.size/2 - wobble/2, 
+        0, 0, Math.PI * 2
+    );
+    ctx.fillStyle = enemy.color;
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#7B1FA2'; // Darker purple
+    ctx.stroke();
+    
+    // Highlight
+    ctx.beginPath();
+    ctx.ellipse(
+        centerX - enemy.size/6, 
+        centerY - bounceOffset - enemy.size/6, 
+        enemy.size/6, 
+        enemy.size/8, 
+        Math.PI/4, 0, Math.PI * 2
+    );
+    ctx.fillStyle = '#CE93D8'; // Light purple
+    ctx.fill();
+    
+    // Eyes
+    const eyeSize = enemy.size / 10;
+    const eyeDistance = enemy.size / 5;
+    
+    // Left eye
+    ctx.beginPath();
+    ctx.arc(centerX - eyeDistance, centerY - bounceOffset - eyeSize, eyeSize, 0, Math.PI * 2);
+    ctx.fillStyle = '#000000';
+    ctx.fill();
+    
+    // Right eye
+    ctx.beginPath();
+    ctx.arc(centerX + eyeDistance, centerY - bounceOffset - eyeSize, eyeSize, 0, Math.PI * 2);
+    ctx.fillStyle = '#000000';
+    ctx.fill();
+    
+    // Mouth (simple curve)
+    ctx.beginPath();
+    ctx.arc(centerX, centerY - bounceOffset + enemy.size/6, enemy.size/5, 0.1 * Math.PI, 0.9 * Math.PI);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#7B1FA2';
+    ctx.stroke();
+}
+
+// Damage the player and handle invulnerability
+function damagePlayer(amount) {
+    try {
+        // Only take damage if not invulnerable
+        if (!player.invulnerable) {
+            player.health -= amount;
+            
+            // Make player invulnerable temporarily
+            player.invulnerable = true;
+            player.invulnerabilityTime = player.invulnerabilityDuration;
+            player.damageFlashTime = 10; // Flash for 10 frames
+            
+            // Play damage sound
+            playSound('damage');
+            
+            // Check if player is dead
+            if (player.health <= 0) {
+                gameOver();
+            }
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'player damage');
+    }
+}
+
+// Handle game over
+function gameOver() {
+    try {
+        // Reset player health
+        player.health = player.maxHealth;
+        
+        // Reset player position to a safe location
+        initializePlayerPosition();
+        
+        // Respawn enemies
+        spawnEnemies();
+        
+        // Display game over message
+        showMessage('Game Over! You have been respawned.', 3000);
+    } catch (error) {
+        errorHandler.handle(error, 'game over');
+    }
+}
+
+// Show a temporary message on screen
+function showMessage(text, duration) {
+    try {
+        const messageElement = document.createElement('div');
+        messageElement.className = 'game-message';
+        messageElement.textContent = text;
+        document.body.appendChild(messageElement);
+        
+        // Remove the message after the specified duration
+        setTimeout(() => {
+            document.body.removeChild(messageElement);
+        }, duration);
+    } catch (error) {
+        errorHandler.handle(error, 'show message');
+    }
+}
+
+// Play a sound effect
+function playSound(soundName) {
+    try {
+        // Simple audio implementation
+        const sounds = {
+            damage: 'data:audio/wav;base64,UklGRl9vAAADZGF0YT9v',
+            // Add more sounds as needed
+        };
+        
+        // Only play if we have the sound
+        if (sounds[soundName]) {
+            const audio = new Audio(sounds[soundName]);
+            audio.volume = 0.3; // Lower volume
+            audio.play().catch(e => console.log('Audio play error:', e));
+        }
+    } catch (error) {
+        errorHandler.handle(error, 'play sound');
     }
 }
 
